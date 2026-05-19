@@ -3,6 +3,8 @@ import argparse
 import os
 import sys
 
+import yaml
+
 from .namelist import get_fire_subgrid_ratios, get_domain_params
 from .wrf_domain import read_domain_from_met_em
 from .fire_grid import build_fire_grid
@@ -10,8 +12,84 @@ from .raster import reproject_fuel, reproject_dem
 from .fuel_tables import get_fuel_table, list_fuel_tables
 from .met_em_io import find_met_em_files, check_existing_fire_vars, prompt_overwrite, write_fire_vars
 
+# Maps config.yaml keys → argparse dest names.
+# Supports both underscore and hyphen variants for convenience.
+_CONFIG_KEY_MAP = {
+    "met_files":  "met_em",
+    "met_em":     "met_em",
+    "ZSF":        "dem",
+    "dem":        "dem",
+    "fuel":       "fuel",
+    "namelist":   "namelist",
+    "fuel_table": "fuel_table",
+    "fuel-table": "fuel_table",
+    "domain":     "domain",
+    "overwrite":  "yes",
+}
+
+_REQUIRED = ("met_em", "fuel", "dem", "namelist")
+
+
+def load_config(path: str) -> dict:
+    """Load a YAML config file and return a dict keyed by argparse dest names."""
+    with open(path) as fh:
+        raw = yaml.safe_load(fh)
+    if not isinstance(raw, dict):
+        raise ValueError(f"Config file '{path}' must contain a YAML mapping at the top level.")
+
+    cfg = {}
+    unknown = []
+    for key, value in raw.items():
+        dest = _CONFIG_KEY_MAP.get(key)
+        if dest is None:
+            unknown.append(key)
+        else:
+            cfg[dest] = value
+
+    if unknown:
+        print(f"Warning: unrecognised config key(s) ignored: {', '.join(unknown)}", file=sys.stderr)
+
+    return cfg
+
+
+def _merge(args: argparse.Namespace, cfg: dict) -> argparse.Namespace:
+    """Apply config values for any arg that was not set explicitly on the CLI.
+
+    Precedence (highest → lowest): CLI flag  >  config file  >  argparse default.
+
+    argparse stores the default for store_true flags as False and for optional
+    string args as None, so we treat False / None as "not set by the user".
+    """
+    for dest, value in cfg.items():
+        current = getattr(args, dest, None)
+        if dest == "yes":
+            # Only apply config's overwrite=True if --yes was not passed
+            if not current:
+                setattr(args, dest, bool(value))
+        elif dest == "domain":
+            # domain has a non-None default (1); only override if still at default
+            # and config provides an explicit value
+            if current == 1 and value is not None:
+                setattr(args, dest, int(value))
+        elif dest == "fuel_table":
+            if current == "fbfm13":  # argparse default; override with config value
+                setattr(args, dest, str(value))
+        else:
+            if current is None:
+                setattr(args, dest, str(value) if value is not None else None)
+    return args
+
 
 def build_parser() -> argparse.ArgumentParser:
+    config_example = (
+        "  met_files: 'met_em.d01.*.nc'\n"
+        "  ZSF:       /path/to/highres_dem.tif\n"
+        "  fuel:      /path/to/landfire.tif\n"
+        "  namelist:  namelist.wps\n"
+        "  fuel_table: fbfm13\n"
+        "  domain:    1\n"
+        "  overwrite: false\n"
+    )
     parser = argparse.ArgumentParser(
         prog="fire_preprocess",
         description=(
@@ -21,39 +99,44 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             f"Built-in fuel tables: {', '.join(list_fuel_tables())}\n\n"
-            "Example:\n"
-            "  fire_preprocess \\\n"
-            "      --met-em /path/to/WPS/ \\\n"
-            "      --fuel   LANDFIRE_FBFM13.tif \\\n"
-            "      --dem    usgs_1_3arcsec.tif \\\n"
-            "      --namelist namelist.wps\n"
+            "Config file keys (YAML):\n"
+            f"{config_example}\n"
+            "CLI flags override config file values when both are supplied.\n\n"
+            "Example (CLI only):\n"
+            "  fire_preprocess --met-em /path/to/WPS/ --fuel landfire.tif \\\n"
+            "                  --dem dem.tif --namelist namelist.wps\n\n"
+            "Example (config file):\n"
+            "  fire_preprocess --config fire_preprocess.yaml\n"
         ),
     )
     parser.add_argument(
-        "--met-em", required=True, metavar="PATH",
+        "-c", "--config", metavar="FILE",
+        help="YAML config file; any key can be overridden by a CLI flag",
+    )
+    parser.add_argument(
+        "--met-em", default=None, metavar="PATH",
         help=(
-            "Path to a met_em file, a directory containing met_em files, "
-            "or a glob pattern (e.g. 'WPS/met_em.d01.*.nc')"
+            "Path to a met_em file, directory, or glob pattern "
+            "(config key: met_files)"
         ),
     )
     parser.add_argument(
-        "--fuel", required=True, metavar="GEOTIFF",
-        help="LANDFIRE fuel-category GeoTIFF used as the NFUEL_CAT source",
+        "--fuel", default=None, metavar="GEOTIFF",
+        help="LANDFIRE fuel-category GeoTIFF (NFUEL_CAT source)",
     )
     parser.add_argument(
-        "--dem", required=True, metavar="GEOTIFF",
-        help="High-resolution terrain DEM GeoTIFF used as the ZSF source (≥1/3 arc-sec recommended)",
+        "--dem", default=None, metavar="GEOTIFF",
+        help="High-resolution terrain DEM GeoTIFF (ZSF source; config key: ZSF)",
     )
     parser.add_argument(
-        "--namelist", required=True, metavar="FILE",
+        "--namelist", default=None, metavar="FILE",
         help="Path to namelist.wps (provides subgrid_ratio_x/y and projection parameters)",
     )
     parser.add_argument(
         "--fuel-table", default="fbfm13", metavar="NAME|PATH",
         help=(
-            f"Fuel remapping table: built-in name or path to a CSV file. "
-            f"Default: fbfm13. "
-            f"Available: {', '.join(list_fuel_tables())}"
+            f"Fuel remapping table: built-in name or CSV path. "
+            f"Default: fbfm13. Available: {', '.join(list_fuel_tables())}"
         ),
     )
     parser.add_argument(
@@ -62,13 +145,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "-y", "--yes", action="store_true",
-        help="Overwrite existing NFUEL_CAT/ZSF variables without prompting",
+        help="Overwrite existing NFUEL_CAT/ZSF variables without prompting (config key: overwrite)",
     )
     return parser
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    # ── Load and merge config file ────────────────────────────────────────────
+    if args.config:
+        cfg = load_config(args.config)
+        args = _merge(args, cfg)
+
+    # ── Validate required arguments ───────────────────────────────────────────
+    missing = [f"--{d.replace('_', '-')}" for d in _REQUIRED if not getattr(args, d, None)]
+    if missing:
+        parser.error(
+            f"The following arguments are required: {', '.join(missing)}\n"
+            "Supply them on the command line or via --config."
+        )
 
     # ── Find met_em files ─────────────────────────────────────────────────────
     print(f"Searching for met_em files: {args.met_em}")
