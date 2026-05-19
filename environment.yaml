@@ -3,7 +3,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python>=3.13
+  - python>=3.12
   - netcdf4>=1.7.4
   - numpy>=2.0
   - rasterio>=1.5.0
