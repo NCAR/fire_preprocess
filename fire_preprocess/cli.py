@@ -171,10 +171,9 @@ def main(argv=None):
 
     fire_grid = build_fire_grid(domain)
     print(
-        f"  Fire mass grid   : {fire_grid.nx_mass} × {fire_grid.ny_mass}  "
+        f"  Fire grid        : {fire_grid.nx_fire} × {fire_grid.ny_fire}  "
         f"({fire_grid.dx:.1f} m × {fire_grid.dy:.1f} m cells)"
     )
-    print(f"  Fire stag grid   : {fire_grid.nx_stag} × {fire_grid.ny_stag}")
 
     # ── Load fuel table ───────────────────────────────────────────────────────
     fuel_table = get_fuel_table(args.fuel_table)
@@ -212,7 +211,12 @@ def main(argv=None):
                 continue
 
         print(f"  Writing {label} ... ", end="", flush=True)
-        write_fire_vars(file_path, nfuel, zsf, overwrite=overwrite)
+        write_fire_vars(
+            file_path, nfuel, zsf, sr_x, sr_y,
+            nfuel_description=f"Fuel category for fire model ({fuel_table.description})",
+            zsf_description=f"Topography height; source: {os.path.basename(args.zsf)}",
+            overwrite=overwrite,
+        )
         print("done.")
 
     written = len(files) - skipped

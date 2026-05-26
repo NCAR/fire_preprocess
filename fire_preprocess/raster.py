@@ -1,12 +1,12 @@
 """Read and reproject GeoTIFF files onto the WRF fire subgrid.
 
 Two public entry points:
-  reproject_fuel(src_path, fire_grid)  →  float32 array on mass grid
-  reproject_dem (src_path, fire_grid)  →  float32 array on staggered grid
+  reproject_fuel(src_path, fire_grid)  →  float32 array (NFUEL_CAT)
+  reproject_dem (src_path, fire_grid)  →  float32 array (ZSF)
 
-Both use rasterio.warp.reproject so the source raster can be in any CRS
-supported by GDAL/PROJ; the transformation to the WRF map projection is
-performed automatically.
+Both map onto the same fire grid (south_north_subgrid × west_east_subgrid).
+rasterio.warp.reproject handles the CRS transformation from the source
+raster's native projection to the WRF map projection automatically.
 """
 import warnings
 import numpy as np
@@ -34,7 +34,6 @@ def _warn_coverage(arr, nodata_val, field_name, threshold=0.05):
 def reproject_to_grid(
     src_path: str,
     fire_grid: FireGrid,
-    target: str,
     resampling: Resampling,
     band: int = 1,
     src_nodata: float = None,
@@ -42,28 +41,10 @@ def reproject_to_grid(
 ) -> np.ndarray:
     """Core reprojection routine.
 
-    Args:
-        src_path:   path to source GeoTIFF
-        fire_grid:  FireGrid object describing the target grid
-        target:     "mass" (NFUEL_CAT) or "stag" (ZSF)
-        resampling: rasterio Resampling enum value
-        band:       1-based band index to read from source
-        src_nodata: override source nodata value (None = use raster metadata)
-        field_name: used in warning messages only
-
-    Returns:
-        2-D float32 numpy array in WRF row order (south_north, west_east):
-        row 0 is the *southernmost* row, matching WRF/WPS netCDF convention.
+    Returns a 2-D float32 array in WRF row order (south_north, west_east):
+    row 0 is the *southernmost* row, matching WRF/WPS netCDF convention.
     """
-    if target == "mass":
-        height, width = fire_grid.ny_mass, fire_grid.nx_mass
-        dst_transform = fire_grid.transform_mass
-    elif target == "stag":
-        height, width = fire_grid.ny_stag, fire_grid.nx_stag
-        dst_transform = fire_grid.transform_stag
-    else:
-        raise ValueError(f"target must be 'mass' or 'stag', got '{target!r}'")
-
+    height, width = fire_grid.ny_fire, fire_grid.nx_fire
     dst_crs = RasterioCRS.from_user_input(fire_grid.crs.to_wkt())
 
     # np.zeros ensures any pixels rasterio does not write (e.g. at domain
@@ -80,7 +61,7 @@ def reproject_to_grid(
             src_transform=src.transform,
             src_crs=src.crs,
             src_nodata=nodata,
-            dst_transform=dst_transform,
+            dst_transform=fire_grid.transform,
             dst_crs=dst_crs,
             resampling=resampling,
         )
@@ -93,14 +74,13 @@ def reproject_to_grid(
 
 
 def reproject_fuel(src_path: str, fire_grid: FireGrid, band: int = 1) -> np.ndarray:
-    """Reproject a fuel-category GeoTIFF to the fire mass grid.
+    """Reproject a fuel-category GeoTIFF to the fire grid.
 
     Uses nearest-neighbour resampling to preserve integer category values.
     LANDFIRE categorical data must not be interpolated.
     """
     return reproject_to_grid(
         src_path, fire_grid,
-        target="mass",
         resampling=Resampling.nearest,
         band=band,
         field_name="NFUEL_CAT",
@@ -108,14 +88,13 @@ def reproject_fuel(src_path: str, fire_grid: FireGrid, band: int = 1) -> np.ndar
 
 
 def reproject_dem(src_path: str, fire_grid: FireGrid, band: int = 1) -> np.ndarray:
-    """Reproject a terrain DEM GeoTIFF to the fire staggered grid.
+    """Reproject a terrain DEM GeoTIFF to the fire grid.
 
     Uses bilinear resampling, matching the WPS geogrid four_pt interpolation
     specified for ZSF in GEOGRID.TBL.FIRE.
     """
     return reproject_to_grid(
         src_path, fire_grid,
-        target="stag",
         resampling=Resampling.bilinear,
         band=band,
         field_name="ZSF",
