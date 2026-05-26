@@ -1,5 +1,6 @@
 """Command-line interface for fire_preprocess."""
 import argparse
+import glob
 import os
 import sys
 
@@ -10,7 +11,7 @@ from .wrf_domain import read_domain_from_met_em
 from .fire_grid import build_fire_grid
 from .raster import reproject_fuel, reproject_dem
 from .fuel_tables import get_fuel_table, list_fuel_tables
-from .met_em_io import find_met_em_files, check_existing_fire_vars, prompt_overwrite, write_fire_vars
+from .met_em_io import check_existing_fire_vars, prompt_overwrite, write_fire_vars
 
 _REQUIRED = ("met_files", "zsf", "fuel", "namelist")
 
@@ -146,9 +147,11 @@ def main(argv=None):
 
     # ── Find met_em files ─────────────────────────────────────────────────────
     print(f"Searching for met_em files: {args.met_files}")
-    met_em_files = find_met_em_files(args.met_files)
-    basenames = [os.path.basename(f) for f in met_em_files]
-    print(f"  Found {len(met_em_files)} file(s): {basenames}")
+    files = sorted(glob.glob(args.met_files))
+    if not files:
+        raise FileNotFoundError(f"No files matched the pattern: '{args.met_files}'")
+    basenames = [os.path.basename(f) for f in files]
+    print(f"  Found {len(files)} file(s): {basenames}")
 
     # ── Read namelist ─────────────────────────────────────────────────────────
     domain_index = args.domain - 1  # namelist arrays are 0-indexed, domain numbers are 1-indexed
@@ -159,7 +162,7 @@ def main(argv=None):
 
     # ── Build WRF domain geometry ─────────────────────────────────────────────
     print(f"Reading domain geometry from {basenames[0]} ...")
-    domain = read_domain_from_met_em(met_em_files[0], sr_x, sr_y, namelist_params=nml_params)
+    domain = read_domain_from_met_em(files[0], sr_x, sr_y, namelist_params=nml_params)
     print(
         f"  Atmospheric grid : {domain.nx} × {domain.ny} mass pts  "
         f"dx={domain.dx:.1f} m  dy={domain.dy:.1f} m"
@@ -195,7 +198,7 @@ def main(argv=None):
 
     # ── Write to met_em files ─────────────────────────────────────────────────
     skipped = 0
-    for met_em_path in met_em_files:
+    for met_em_path in files:
         label = os.path.basename(met_em_path)
         existing = check_existing_fire_vars(met_em_path)
         overwrite = args.overwrite
@@ -211,7 +214,7 @@ def main(argv=None):
         write_fire_vars(met_em_path, nfuel, zsf, overwrite=overwrite)
         print("done.")
 
-    written = len(met_em_files) - skipped
+    written = len(files) - skipped
     print(f"\nFinished: {written} file(s) updated, {skipped} skipped.")
     if written == 0:
         sys.exit(1)

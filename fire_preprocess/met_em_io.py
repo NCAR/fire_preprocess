@@ -8,7 +8,6 @@ Convention note — ZSF dimension names:
     south_north_subgrid_stag / west_east_subgrid_stag  (stagger, ZSF)
   If your WPS version uses different names, adjust _DIM_STAG_SN / _DIM_STAG_WE.
 """
-import glob
 import os
 from typing import List
 
@@ -21,24 +20,6 @@ _DIM_MASS_SN = "south_north_subgrid"
 _DIM_MASS_WE = "west_east_subgrid"
 _DIM_STAG_SN = "south_north_subgrid_stag"
 _DIM_STAG_WE = "west_east_subgrid_stag"
-
-
-# ── File discovery ────────────────────────────────────────────────────────────
-
-def find_met_em_files(path: str) -> List[str]:
-    """Return a sorted list of WPS output files matching *path*.
-
-    *path* may be:
-      - a direct path to a single file  (e.g. geo_em.d02.nc)
-      - a glob pattern                  (e.g. 'met_em.d01.*.nc')
-    """
-    if os.path.isfile(path):
-        return [path]
-
-    files = sorted(glob.glob(path))
-    if not files:
-        raise FileNotFoundError(f"No files matched the pattern: '{path}'")
-    return files
 
 
 # ── Conflict detection and user prompt ───────────────────────────────────────
