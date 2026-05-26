@@ -135,7 +135,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     # ── Load config and merge ─────────────────────────────────────────────────
-    cfg = load_config(args.config) if args.config else {}
+    cfg = load_config(args.config) if args.config and os.path.isfile(args.config) else {}
     args = _merge(args, cfg)
 
     # ── Validate required arguments ───────────────────────────────────────────
