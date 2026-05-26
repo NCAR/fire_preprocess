@@ -1,0 +1,4 @@
+*.nc
+*.grb2
+*.grib2
+FILE:*

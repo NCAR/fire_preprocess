@@ -52,8 +52,8 @@ def reproject_to_grid(
         field_name: used in warning messages only
 
     Returns:
-        2-D float32 numpy array in row-major (south_north, west_east) order.
-        Row 0 is the northernmost row (matching met_em convention).
+        2-D float32 numpy array in WRF row order (south_north, west_east):
+        row 0 is the *southernmost* row, matching WRF/WPS netCDF convention.
     """
     if target == "mass":
         height, width = fire_grid.ny_mass, fire_grid.nx_mass
@@ -65,7 +65,10 @@ def reproject_to_grid(
         raise ValueError(f"target must be 'mass' or 'stag', got '{target!r}'")
 
     dst_crs = RasterioCRS.from_user_input(fire_grid.crs.to_wkt())
-    dst_data = np.empty((height, width), dtype=np.float32)
+
+    # np.zeros ensures any pixels rasterio does not write (e.g. at domain
+    # edges outside the source extent) get a known value rather than garbage.
+    dst_data = np.zeros((height, width), dtype=np.float32)
 
     with rasterio.open(src_path) as src:
         nodata = src_nodata if src_nodata is not None else src.nodata
@@ -81,6 +84,9 @@ def reproject_to_grid(
             dst_crs=dst_crs,
             resampling=resampling,
         )
+
+    # rasterio returns row 0 = north; WRF netCDF expects row 0 = south.
+    dst_data = np.flipud(dst_data)
 
     _warn_coverage(dst_data, nodata, field_name)
     return dst_data

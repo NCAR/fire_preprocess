@@ -48,7 +48,7 @@ _LANDFIRE_TO_WRF40 = {
 FBFM40 = FuelTable(
     name="fbfm40",
     description="Scott & Burgan 40-category fuel model (requires WRF NB_FUEL_CATS=40)",
-    nodata_values=[0, 91, 92, 93, 98, 99, -9999],
+    nodata_values=[0, 91, 92, 93, 98, 99, -9999, 32767],
     nodata_out=99,  # WRF-FIRE non-burnable placeholder for 40-cat table
     remap=_LANDFIRE_TO_WRF40,
 )
@@ -77,7 +77,7 @@ _LANDFIRE_TO_ANDERSON13 = {
 FBFM40_TO_ANDERSON13 = FuelTable(
     name="fbfm40_to_anderson13",
     description="Scott & Burgan 40 remapped to Anderson 13 (approximate crosswalk)",
-    nodata_values=[0, 91, 92, 93, 98, 99, -9999],
+    nodata_values=[0, 91, 92, 93, 98, 99, -9999, 32767],
     nodata_out=14,
     remap=_LANDFIRE_TO_ANDERSON13,
 )

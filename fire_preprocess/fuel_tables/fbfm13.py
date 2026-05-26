@@ -15,8 +15,9 @@ from .base import FuelTable
 FBFM13 = FuelTable(
     name="fbfm13",
     description="Anderson 13-category fuel model (FBFM13) — direct LANDFIRE passthrough",
-    # LANDFIRE non-burnable codes; all map to nodata_out=14
-    nodata_values=[0, 91, 92, 93, 98, 99, -9999],
+    # LANDFIRE non-burnable and fill codes; all map to nodata_out=14.
+    # 32767 is LANDFIRE's fill value for pixels outside the valid data extent.
+    nodata_values=[0, 91, 92, 93, 98, 99, -9999, 32767],
     nodata_out=14,
     remap=None,  # values 1-13 already match WRF-FIRE
 )
