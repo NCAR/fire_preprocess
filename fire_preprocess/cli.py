@@ -151,10 +151,11 @@ def main(argv=None):
     print(f"  Found {len(met_em_files)} file(s): {basenames}")
 
     # ── Read namelist ─────────────────────────────────────────────────────────
+    domain_index = args.domain - 1  # namelist arrays are 0-indexed, domain numbers are 1-indexed
     print(f"Reading namelist: {args.namelist}")
-    sr_x, sr_y = get_fire_subgrid_ratios(args.namelist)
+    sr_x, sr_y = get_fire_subgrid_ratios(args.namelist, domain_index=domain_index)
     print(f"  subgrid_ratio_x = {sr_x},  subgrid_ratio_y = {sr_y}")
-    nml_params = get_domain_params(args.namelist)
+    nml_params = get_domain_params(args.namelist, domain_index=domain_index)
 
     # ── Build WRF domain geometry ─────────────────────────────────────────────
     print(f"Reading domain geometry from {basenames[0]} ...")
