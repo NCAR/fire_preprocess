@@ -7,13 +7,13 @@ import sys
 import yaml
 
 from .namelist import get_fire_subgrid_ratios, get_domain_params
-from .wrf_domain import read_domain_from_met_em
+from .wrf_domain import read_domain_from_file
 from .fire_grid import build_fire_grid
 from .raster import reproject_fuel, reproject_dem
 from .fuel_tables import get_fuel_table, list_fuel_tables
-from .met_em_io import check_existing_fire_vars, prompt_overwrite, write_fire_vars
+from .wps_io import check_existing_fire_vars, prompt_overwrite, write_fire_vars
 
-_REQUIRED = ("met_files", "zsf", "fuel", "namelist")
+_REQUIRED = ("wps_files", "zsf", "fuel", "namelist")
 
 # Defaults applied after CLI + config are merged, so neither source
 # can be mistaken for an explicit user value.
@@ -64,7 +64,7 @@ def _merge(args: argparse.Namespace, cfg: dict) -> argparse.Namespace:
 
 def build_parser() -> argparse.ArgumentParser:
     config_example = (
-        "  met_files:  'met_em.d01.*.nc'\n"
+        "  wps_files:  'met_em.d01.*.nc'\n"
         "  zsf:        /path/to/highres_dem.tif\n"
         "  fuel:       /path/to/landfire.tif\n"
         "  namelist:   namelist.wps\n"
@@ -75,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fire_preprocess",
         description=(
-            "Add WRF-FIRE fields (NFUEL_CAT, ZSF) directly to met_em netCDF files,\n"
+            "Add WRF-FIRE fields (NFUEL_CAT, ZSF) directly to WPS netCDF files,\n"
             "bypassing GEOGRID.TBL editing and geogrid binary format conversion."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -85,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
             f"{config_example}\n"
             "CLI flags override config file values when both are supplied.\n\n"
             "Example (CLI only):\n"
-            "  fire_preprocess --met-files 'met_em.d01.*.nc' --fuel landfire.tif \\\n"
+            "  fire_preprocess --wps-files 'met_em.d01.*.nc' --fuel landfire.tif \\\n"
             "                  --zsf dem.tif --namelist namelist.wps\n\n"
             "Example (config file):\n"
             "  fire_preprocess --config config.yaml\n"
@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="YAML config file; any key can be overridden by a CLI flag",
     )
     parser.add_argument(
-        "--met-files", default=None, metavar="PATH", dest="met_files",
+        "--wps-files", default=None, metavar="PATH", dest="wps_files",
         help="Path to a WPS output file (geo_em/met_em) or a glob pattern (e.g. 'met_em.d01.*.nc')",
     )
     parser.add_argument(
@@ -120,7 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--domain", type=int, default=None, metavar="N",
-        help="Domain number used when searching a directory for met_em files. Default: 1",
+        help="Domain number used when reading namelist values. Default: 1",
     )
     parser.add_argument(
         "--overwrite", action="store_true", default=False,
@@ -145,11 +145,11 @@ def main(argv=None):
             "Supply them on the command line or via --config."
         )
 
-    # ── Find met_em files ─────────────────────────────────────────────────────
-    print(f"Searching for met_em files: {args.met_files}")
-    files = sorted(glob.glob(args.met_files))
+    # ── Find WPS files ─────────────────────────────────────────────────────
+    print(f"Searching for WPS file(s): {args.wps_files}")
+    files = sorted(glob.glob(args.wps_files))
     if not files:
-        raise FileNotFoundError(f"No files matched the pattern: '{args.met_files}'")
+        raise FileNotFoundError(f"No files matched the pattern: '{args.wps_files}'")
     basenames = [os.path.basename(f) for f in files]
     print(f"  Found {len(files)} file(s): {basenames}")
 
@@ -162,7 +162,7 @@ def main(argv=None):
 
     # ── Build WRF domain geometry ─────────────────────────────────────────────
     print(f"Reading domain geometry from {basenames[0]} ...")
-    domain = read_domain_from_met_em(files[0], sr_x, sr_y, namelist_params=nml_params)
+    domain = read_domain_from_file(files[0], sr_x, sr_y, namelist_params=nml_params)
     print(
         f"  Atmospheric grid : {domain.nx} × {domain.ny} mass pts  "
         f"dx={domain.dx:.1f} m  dy={domain.dy:.1f} m"
@@ -196,22 +196,22 @@ def main(argv=None):
         f"range [{zsf.min():.1f}, {zsf.max():.1f}] m"
     )
 
-    # ── Write to met_em files ─────────────────────────────────────────────────
+    # ── Write to WPS files ─────────────────────────────────────────────────
     skipped = 0
-    for met_em_path in files:
-        label = os.path.basename(met_em_path)
-        existing = check_existing_fire_vars(met_em_path)
+    for file_path in files:
+        label = os.path.basename(file_path)
+        existing = check_existing_fire_vars(file_path)
         overwrite = args.overwrite
 
         if existing and not overwrite:
-            overwrite = prompt_overwrite(met_em_path, existing)
+            overwrite = prompt_overwrite(file_path, existing)
             if not overwrite:
                 print(f"  Skipped {label}.")
                 skipped += 1
                 continue
 
         print(f"  Writing {label} ... ", end="", flush=True)
-        write_fire_vars(met_em_path, nfuel, zsf, overwrite=overwrite)
+        write_fire_vars(file_path, nfuel, zsf, overwrite=overwrite)
         print("done.")
 
     written = len(files) - skipped

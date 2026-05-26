@@ -9,15 +9,15 @@ import netCDF4 as nc
 import numpy as np
 from pyproj import CRS, Transformer
 
-WRF_SPHERE_RADIUS = 6370000.0  # metres, matches WRF's MAP_FACTOR
+WRF_SPHERE_RADIUS = 6370000.0  # meters, matches WRF's MAP_FACTOR
 
 
 @dataclass
 class WRFDomain:
     nx: int           # atmospheric mass points, west-east  (= e_we - 1)
     ny: int           # atmospheric mass points, south-north (= e_sn - 1)
-    dx: float         # atmospheric grid spacing, metres (west-east)
-    dy: float         # atmospheric grid spacing, metres (south-north)
+    dx: float         # atmospheric grid spacing, meters (west-east)
+    dy: float         # atmospheric grid spacing, meters (south-north)
     map_proj: int     # 1=LCC, 2=Polar Stereographic, 3=Mercator, 6=Lat-Lon
     truelat1: float
     truelat2: float
@@ -58,10 +58,10 @@ def build_wrf_crs(map_proj, truelat1, truelat2, stand_lon):
     return CRS.from_proj4(proj_str)
 
 
-def _sw_corner_from_met_em(ds, crs):
-    """Return (x_sw_mass, y_sw_mass) in WRF proj coords from met_em arrays."""
+def _sw_corner_from_wps(ds, crs):
+    """Return (x_sw_mass, y_sw_mass) in WRF proj coords from WPS arrays."""
     if "XLAT_M" not in ds.variables or "XLONG_M" not in ds.variables:
-        raise KeyError("met_em file is missing XLAT_M / XLONG_M variables")
+        raise KeyError("netCDF file is missing XLAT_M / XLONG_M variables")
 
     lat_sw = float(ds.variables["XLAT_M"][0, 0, 0])
     lon_sw = float(ds.variables["XLONG_M"][0, 0, 0])
@@ -92,11 +92,11 @@ def _sw_corner_from_namelist(params, crs):
     return x_sw_mass, y_sw_mass
 
 
-def read_domain_from_met_em(met_em_path, sr_x, sr_y, namelist_params=None):
-    """Build a WRFDomain by reading a met_em netCDF file.
+def read_domain_from_file(file_path, sr_x, sr_y, namelist_params=None):
+    """Build a WRFDomain by reading a WPS netCDF file.
 
     Args:
-        met_em_path: path to any met_em.d0X.*.nc file for the domain
+        file_path: path to any met_em*.nc or geo_em*.nc file for the domain
         sr_x, sr_y: fire subgrid ratios from namelist.wps
         namelist_params: optional dict from namelist.get_domain_params(), used
                          as fallback if XLAT_M/XLONG_M are absent
@@ -104,7 +104,7 @@ def read_domain_from_met_em(met_em_path, sr_x, sr_y, namelist_params=None):
     Returns:
         WRFDomain dataclass
     """
-    with nc.Dataset(met_em_path) as ds:
+    with nc.Dataset(file_path) as ds:
         attrs = {k: ds.getncattr(k) for k in ds.ncattrs()}
 
         map_proj = int(attrs["MAP_PROJ"])
@@ -117,13 +117,13 @@ def read_domain_from_met_em(met_em_path, sr_x, sr_y, namelist_params=None):
         crs = build_wrf_crs(map_proj, truelat1, truelat2, stand_lon)
 
         try:
-            x_sw_mass, y_sw_mass = _sw_corner_from_met_em(ds, crs)
+            x_sw_mass, y_sw_mass = _sw_corner_from_wps(ds, crs)
             ny = ds.variables["XLAT_M"].shape[1]
             nx = ds.variables["XLAT_M"].shape[2]
         except KeyError:
             if namelist_params is None:
                 raise RuntimeError(
-                    "XLAT_M/XLONG_M not found in met_em and no namelist_params supplied"
+                    "XLAT_M/XLONG_M not found in file and no namelist_params supplied"
                 )
             x_sw_mass, y_sw_mass = _sw_corner_from_namelist(namelist_params, crs)
             nx = namelist_params["e_we"] - 1

@@ -25,8 +25,8 @@ class FireGrid:
     # Mass grid — used for NFUEL_CAT
     nx_mass: int
     ny_mass: int
-    dx: float           # fire cell spacing (metres), west-east
-    dy: float           # fire cell spacing (metres), south-north
+    dx: float           # fire cell spacing (meters), west-east
+    dy: float           # fire cell spacing (meters), south-north
     transform_mass: object  # affine.Affine: pixel origin at top-left corner
 
     # Staggered grid — used for ZSF (one extra point in each direction)

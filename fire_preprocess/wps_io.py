@@ -1,4 +1,4 @@
-"""Read and write WRF met_em netCDF files.
+"""Read and write WPS netCDF files.
 
 Convention note — ZSF dimension names:
   WRF-FIRE's Registry defines ZSF on the *staggered* fire grid
@@ -119,10 +119,10 @@ def write_fire_vars(
     zsf: np.ndarray,
     overwrite: bool = False,
 ) -> None:
-    """Write NFUEL_CAT and ZSF into a met_em file, modifying it in-place.
+    """Write NFUEL_CAT and ZSF into a netCDF file, modifying it in-place.
 
     Args:
-        path:       met_em netCDF file path
+        path:       WPS netCDF file path
         nfuel_cat:  float32 array, shape (ny_mass, nx_mass), row 0 = northernmost
         zsf:        float32 array, shape (ny_stag, nx_stag), row 0 = northernmost
         overwrite:  if True, silently overwrite any existing fire variables
