@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--met-files", default=None, metavar="PATH", dest="met_files",
-        help="Path to a met_em file, directory, or glob pattern",
+        help="Path to a WPS output file (geo_em/met_em) or a glob pattern (e.g. 'met_em.d01.*.nc')",
     )
     parser.add_argument(
         "--zsf", default=None, metavar="GEOTIFF",
@@ -146,7 +146,7 @@ def main(argv=None):
 
     # ── Find met_em files ─────────────────────────────────────────────────────
     print(f"Searching for met_em files: {args.met_files}")
-    met_em_files = find_met_em_files(args.met_files, domain=args.domain)
+    met_em_files = find_met_em_files(args.met_files)
     basenames = [os.path.basename(f) for f in met_em_files]
     print(f"  Found {len(met_em_files)} file(s): {basenames}")
 

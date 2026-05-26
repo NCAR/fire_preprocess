@@ -25,25 +25,15 @@ _DIM_STAG_WE = "west_east_subgrid_stag"
 
 # ── File discovery ────────────────────────────────────────────────────────────
 
-def find_met_em_files(path: str, domain: int = 1) -> List[str]:
-    """Return a sorted list of met_em files for *domain*.
+def find_met_em_files(path: str) -> List[str]:
+    """Return a sorted list of WPS output files matching *path*.
 
     *path* may be:
-      - a direct path to a single met_em*.nc file
-      - a directory  → finds all met_em.d{domain:02d}.*.nc inside
-      - a glob pattern
+      - a direct path to a single file  (e.g. geo_em.d02.nc)
+      - a glob pattern                  (e.g. 'met_em.d01.*.nc')
     """
     if os.path.isfile(path):
         return [path]
-
-    if os.path.isdir(path):
-        pattern = os.path.join(path, f"met_em.d{domain:02d}.*.nc")
-        files = sorted(glob.glob(pattern))
-        if not files:
-            raise FileNotFoundError(
-                f"No met_em files found in '{path}' for domain d{domain:02d}"
-            )
-        return files
 
     files = sorted(glob.glob(path))
     if not files:
