@@ -20,6 +20,7 @@ _REQUIRED = ("wps_files", "zsf", "fuel", "namelist")
 _DEFAULTS = {
     "fuel_table": "fbfm13",
     "domain": 1,
+    "namelist": "namelist.wps",
     "overwrite": False,
 }
 
@@ -92,7 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "-c", "--config", metavar="FILE",
+        "-c", "--config", metavar="FILE", default="config.yaml",
         help="YAML config file; any key can be overridden by a CLI flag",
     )
     parser.add_argument(
