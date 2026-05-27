@@ -28,8 +28,8 @@ from .base import FuelTable
 
 FBFM40 = FuelTable(
     name="fbfm40",
-    description="Scott & Burgan 40-category fuel model — LANDFIRE 3-digit codes passed through for WRF internal crosswalk",
-    nodata_values=[0, 91, 92, 93, 98, 99, -9999, 32767],
+    description="Scott & Burgan 40-category fuel model — LANDFIRE 3-digit codes passed through for CFBM internal crosswalk",
+    nodata_values=[0, -9999, 32767],
     nodata_out=14,
     remap=None,
 )
