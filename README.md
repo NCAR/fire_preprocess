@@ -112,8 +112,8 @@ python fire_preprocess.py --config config.yaml
 | Name | Description |
 |---|---|
 | `fbfm13` | Anderson 13-category model — LANDFIRE codes 1–13 passed through directly (default) |
-| `fbfm40` | Scott & Burgan 40-category model — requires WRF compiled with `NB_FUEL_CATS=40` |
-| `fbfm40_to_anderson13` | Scott & Burgan 40 remapped to Anderson 13 (approximate crosswalk) |
+| `fbfm40` | Scott & Burgan 40-category model — LANDFIRE 3-digit codes (101–204) passed through unchanged; WRF-FIRE converts them to Anderson 13 internally via `Crosswalk_from_scottburgan_to_anderson` |
+| `fbfm40_to_anderson13` | Scott & Burgan 40 pre-converted to Anderson 13 using the exact crosswalk from WRF-FIRE's `fuel_mod.F90` |
 
 A custom remapping can be supplied as a two-column CSV file:
 
