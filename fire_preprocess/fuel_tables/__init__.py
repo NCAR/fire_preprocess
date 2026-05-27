@@ -1,4 +1,4 @@
-"""Fuel table definitions for WRF-FIRE NFUEL_CAT remapping."""
+"""Fuel table definitions for CFBM NFUEL_CAT remapping."""
 from .registry import get_fuel_table, list_fuel_tables
 from .base import FuelTable
 

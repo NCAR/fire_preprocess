@@ -12,7 +12,7 @@ LANDFIRE distributes FBFM40 with a three-digit encoding:
 Two tables are provided:
 
   fbfm40              Passes LANDFIRE 3-digit codes through unchanged.
-                      WRF-FIRE internally calls Crosswalk_from_scottburgan_to_anderson
+                      CFBM internally calls Crosswalk_from_scottburgan_to_anderson
                       (share/fuel_mod.F90) to convert these to Anderson 13 at runtime.
 
   fbfm40_to_anderson13  Pre-applies the same crosswalk that WRF-FIRE uses internally,
@@ -67,7 +67,7 @@ _LANDFIRE_TO_ANDERSON13 = {
 
 FBFM40_TO_ANDERSON13 = FuelTable(
     name="fbfm40_to_anderson13",
-    description="Scott & Burgan 40 remapped to Anderson 13 — exact crosswalk from WRF-FIRE fuel_mod.F90",
+    description="Scott & Burgan 40 remapped to Anderson 13 — exact crosswalk from fire_behavior/fuel_mod.F90",
     nodata_values=[0, 91, 92, 93, 98, 99, -9999, 32767],
     nodata_out=14,
     remap=_LANDFIRE_TO_ANDERSON13,

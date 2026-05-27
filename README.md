@@ -1,9 +1,9 @@
 # fire_preprocess
 
-A standalone Python tool that adds WRF-FIRE's fire-specific input fields
-(`NFUEL_CAT` and `ZSF`) directly to WPS output files (`geo_em` or `met_em`),
-bypassing the traditional workflow that requires converting data to WPS geogrid
-binary format and editing `GEOGRID.TBL`.
+A standalone Python tool that adds fire-specific input fields (`NFUEL_CAT` and `ZSF`) directly to
+WPS output files (`geo_em` or `met_em`) for use with the Community Fire Behavior Model
+(https://github.com/NCAR/fire_behavior), bypassing the traditional workflow that requires
+converting data to WPS geogrid binary format and editing `GEOGRID.TBL`.
 
 ---
 
@@ -36,7 +36,7 @@ Download from the **LANDFIRE data viewer**:
 
 1. Draw your area of interest on the map.
 2. Under *Fire Behavior Fuel Models*, select either:
-   - **FBFM13** – Anderson 13-category model (default, most common for WRF-FIRE)
+   - **FBFM13** – Anderson 13-category model (default)
    - **FBFM40** – Scott & Burgan 40-category model
 3. Choose **GeoTIFF** as the output format and download.
 4. If the download covers multiple tiles, merge them before use:
@@ -112,8 +112,8 @@ python fire_preprocess.py --config config.yaml
 | Name | Description |
 |---|---|
 | `fbfm13` | Anderson 13-category model — LANDFIRE codes 1–13 passed through directly (default) |
-| `fbfm40` | Scott & Burgan 40-category model — LANDFIRE 3-digit codes (101–204) passed through unchanged; WRF-FIRE converts them to Anderson 13 internally via `Crosswalk_from_scottburgan_to_anderson` |
-| `fbfm40_to_anderson13` | Scott & Burgan 40 pre-converted to Anderson 13 using the exact crosswalk from WRF-FIRE's `fuel_mod.F90` |
+| `fbfm40` | Scott & Burgan 40-category model — LANDFIRE 3-digit codes (101–204) passed through unchanged; CFBM converts them to Anderson 13 internally via `Crosswalk_from_scottburgan_to_anderson` |
+| `fbfm40_to_anderson13` | Scott & Burgan 40 pre-converted to Anderson 13 using the exact crosswalk from CFBM's `fuel_mod.F90` |
 
 A custom remapping can be supplied as a two-column CSV file:
 
@@ -133,7 +133,7 @@ python fire_preprocess.py --fuel-table my_remap.csv ...
 
 ## Background
 
-The standard WRF-FIRE workflow requires:
+The standard CFBM workflow requires:
 
 1. Downloading LANDFIRE and USGS terrain data in their native formats
 2. Converting both datasets to WPS geogrid binary format (a technically

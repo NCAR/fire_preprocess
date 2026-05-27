@@ -6,7 +6,7 @@ import numpy as np
 
 @dataclass
 class FuelTable:
-    """Maps source raster values (LANDFIRE codes) to WRF-FIRE NFUEL_CAT values.
+    """Maps source raster values (LANDFIRE codes) to CFBM NFUEL_CAT values.
 
     Attributes:
         name:           short identifier used on the command line
@@ -16,7 +16,7 @@ class FuelTable:
                         convention: 14 = no fuel for Anderson-13 tables)
         remap:          optional dict {source_val: dest_val}; if None the source
                         values are passed through unchanged (suitable for FBFM13
-                        where LANDFIRE codes 1-13 already match WRF-FIRE)
+                        where LANDFIRE codes 1-13 already match CFBM)
     """
     name: str
     description: str

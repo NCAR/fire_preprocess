@@ -76,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fire_preprocess",
         description=(
-            "Add WRF-FIRE fields (NFUEL_CAT, ZSF) directly to WPS netCDF files,\n"
+            "Add CFBM fire fields (NFUEL_CAT, ZSF) directly to WPS netCDF files,\n"
             "bypassing GEOGRID.TBL editing and geogrid binary format conversion."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
