@@ -81,7 +81,7 @@ All arguments can also be supplied via a YAML config file (see below).
 | `--wps-files` | — | WPS output file (`geo_em`/`met_em`) or glob pattern (e.g. `'met_em.d02.*.nc'`) |
 | `--fuel` | — | LANDFIRE fuel-category GeoTIFF (NFUEL_CAT source) |
 | `--zsf` | — | High-resolution terrain DEM GeoTIFF (ZSF source) |
-| `--namelist` | `namelist.wps` | Path to `namelist.wps` |
+| `--namelist` | `namelist.wps` | Path to `namelist.wps`. Optional: if absent, `subgrid_ratio_x/y` are read from the WPS file's `sr_x`/`sr_y` global attributes (a namelist value overrides the file) |
 | `--domain` | `1` | Domain number, used to read the correct `subgrid_ratio_x/y` from the namelist |
 | `--fuel-table` | `fbfm13` | Fuel remapping table (see below) |
 | `--overwrite` | `false` | Overwrite existing fire fields without prompting |

@@ -26,12 +26,16 @@ def get_fire_subgrid_ratios(path, domain_index=0):
         domain_index: 0-based domain index (default 0 = first domain)
 
     Returns:
-        (sr_x, sr_y) as integers; defaults to (1, 1) if not present
+        (sr_x, sr_y) as integers, or (None, None) if the namelist does not
+        set subgrid_ratio_x/y (the caller may then fall back to the sr_x/sr_y
+        global attributes of the WPS file).
     """
     params = read_namelist_wps(path)
-    sr_x = int(_scalar(params.get("subgrid_ratio_x", 1), domain_index))
-    sr_y = int(_scalar(params.get("subgrid_ratio_y", 1), domain_index))
-    return sr_x, sr_y
+    sr_x = params.get("subgrid_ratio_x")
+    sr_y = params.get("subgrid_ratio_y")
+    if sr_x is None or sr_y is None:
+        return None, None
+    return int(_scalar(sr_x, domain_index)), int(_scalar(sr_y, domain_index))
 
 
 def get_domain_params(path, domain_index=0):
