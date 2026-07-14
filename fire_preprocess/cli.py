@@ -7,13 +7,13 @@ import sys
 import yaml
 
 from .namelist import get_fire_subgrid_ratios, get_domain_params
-from .wrf_domain import read_domain_from_file
+from .wrf_domain import read_domain_from_file, read_subgrid_ratios_from_file
 from .fire_grid import build_fire_grid
 from .raster import reproject_fuel, reproject_dem
 from .fuel_tables import get_fuel_table, list_fuel_tables
 from .wps_io import check_existing_fire_vars, prompt_overwrite, write_fire_vars
 
-_REQUIRED = ("wps_files", "zsf", "fuel", "namelist")
+_REQUIRED = ("wps_files", "zsf", "fuel")
 
 # Defaults applied after CLI + config are merged, so neither source
 # can be mistaken for an explicit user value.
@@ -110,7 +110,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--namelist", default=None, metavar="FILE",
-        help="Path to namelist.wps (provides subgrid_ratio_x/y and projection parameters)",
+        help=(
+            "Path to namelist.wps. Optional: subgrid_ratio_x/y are read from the WPS "
+            "file's sr_x/sr_y global attributes when the namelist is absent."
+        ),
     )
     parser.add_argument(
         "--fuel-table", default=None, metavar="NAME|PATH", dest="fuel_table",
@@ -145,7 +148,6 @@ def main(argv=None):
             f"The following arguments are required: {', '.join(missing)}\n"
             "Supply them on the command line or via --config."
         )
-
     # ── Find WPS files ─────────────────────────────────────────────────────
     print(f"Searching for WPS file(s): {args.wps_files}")
     files = sorted(glob.glob(args.wps_files))
@@ -154,12 +156,36 @@ def main(argv=None):
     basenames = [os.path.basename(f) for f in files]
     print(f"  Found {len(files)} file(s): {basenames}")
 
-    # ── Read namelist ─────────────────────────────────────────────────────────
+    # ── Determine fire subgrid ratios and domain parameters ──────────────────
+    # An explicit namelist value wins (e.g. adding a fire grid to a geo_em file
+    # generated without one); otherwise the WPS file's sr_x/sr_y attributes are used.
     domain_index = args.domain - 1  # namelist arrays are 0-indexed, domain numbers are 1-indexed
-    print(f"Reading namelist: {args.namelist}")
-    sr_x, sr_y = get_fire_subgrid_ratios(args.namelist, domain_index=domain_index)
-    print(f"  subgrid_ratio_x = {sr_x},  subgrid_ratio_y = {sr_y}")
-    nml_params = get_domain_params(args.namelist, domain_index=domain_index)
+    file_sr = read_subgrid_ratios_from_file(files[0])
+    nml_sr = (None, None)
+    nml_params = None
+    if os.path.isfile(args.namelist):
+        print(f"Reading namelist: {args.namelist}")
+        nml_sr = get_fire_subgrid_ratios(args.namelist, domain_index=domain_index)
+        nml_params = get_domain_params(args.namelist, domain_index=domain_index)
+
+    if nml_sr[0] is not None:
+        sr_x, sr_y = nml_sr
+        sr_source = args.namelist
+        if file_sr[0] is not None and file_sr != nml_sr:
+            print(
+                f"  Note: {basenames[0]} has sr_x/sr_y = {file_sr[0]}/{file_sr[1]}; "
+                f"using the namelist values {sr_x}/{sr_y} instead."
+            )
+    elif file_sr[0] is not None:
+        sr_x, sr_y = file_sr
+        sr_source = f"{basenames[0]} global attributes"
+    else:
+        parser.error(
+            f"Fire subgrid ratios not found: '{basenames[0]}' has no sr_x/sr_y global "
+            f"attributes and no namelist with subgrid_ratio_x/y was found at "
+            f"'{args.namelist}'. Supply --namelist."
+        )
+    print(f"  subgrid_ratio_x = {sr_x},  subgrid_ratio_y = {sr_y}  (from {sr_source})")
 
     # ── Build WRF domain geometry ─────────────────────────────────────────────
     print(f"Reading domain geometry from {basenames[0]} ...")
