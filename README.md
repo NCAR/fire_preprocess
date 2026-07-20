@@ -1,7 +1,7 @@
 # fire_preprocess
 
 A standalone Python tool that adds fire-specific input fields (`NFUEL_CAT` and `ZSF`) directly to
-WPS output files (`geo_em` or `met_em`) for use with the Community Fire Behavior Model
+WRF/WPS netCDF files (`geo_em`, `met_em`, or `wrfinput`) for use with the Community Fire Behavior Model
 (https://github.com/NCAR/fire_behavior), bypassing the traditional workflow that requires
 converting data to WPS geogrid binary format and editing `GEOGRID.TBL`.
 
@@ -78,7 +78,7 @@ All arguments can also be supplied via a YAML config file (see below).
 
 | Argument | Default | Description |
 |---|---|---|
-| `--wps-files` | — | WPS output file (`geo_em`/`met_em`) or glob pattern (e.g. `'met_em.d02.*.nc'`) |
+| `--wps-files` | — | WRF/WPS file (`geo_em`/`met_em`/`wrfinput`) or glob pattern (e.g. `'met_em.d02.*.nc'`) |
 | `--fuel` | — | LANDFIRE fuel-category GeoTIFF (NFUEL_CAT source) |
 | `--zsf` | — | High-resolution terrain DEM GeoTIFF (ZSF source) |
 | `--namelist` | `namelist.wps` | Path to `namelist.wps` |
@@ -147,3 +147,8 @@ reprojects to the WRF fire subgrid using the projection parameters and
 `subgrid_ratio_x/y` values from `namelist.wps`, and writes `NFUEL_CAT` and
 `ZSF` into the existing WPS netCDF files. The rest of the workflow
 (`real.exe` → WRF) is unchanged.
+
+For nested WPS configurations, `dx` and `dy` are normally scalar values for the
+parent domain. When processing a child domain selected with `--domain`, the tool
+derives the child-domain grid spacing from `parent_grid_ratio`. If `dx` and `dy`
+are supplied as per-domain arrays, those explicit values are used instead.

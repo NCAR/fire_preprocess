@@ -58,19 +58,33 @@ def build_wrf_crs(map_proj, truelat1, truelat2, stand_lon):
     return CRS.from_proj4(proj_str)
 
 
-def _sw_corner_from_wps(ds, crs):
-    """Return (x_sw_mass, y_sw_mass) in WRF proj coords from WPS arrays."""
-    if "XLAT_M" not in ds.variables or "XLONG_M" not in ds.variables:
-        raise KeyError("netCDF file is missing XLAT_M / XLONG_M variables")
+def _mass_latlon_names(ds):
+    """Return mass-grid latitude/longitude variable names for WPS or WRF files."""
+    candidates = (
+        ("XLAT_M", "XLONG_M"),  # geo_em/met_em
+        ("XLAT", "XLONG"),      # wrfinput
+    )
+    for lat_name, lon_name in candidates:
+        if lat_name in ds.variables and lon_name in ds.variables:
+            return lat_name, lon_name
+    raise KeyError("netCDF file is missing mass-grid latitude/longitude variables")
 
-    lat_sw = float(ds.variables["XLAT_M"][0, 0, 0])
-    lon_sw = float(ds.variables["XLONG_M"][0, 0, 0])
+
+def _sw_corner_from_file(ds, crs):
+    """Return mass-grid geometry from WPS or WRF latitude/longitude arrays."""
+    lat_name, lon_name = _mass_latlon_names(ds)
+    lat = ds.variables[lat_name]
+    lon = ds.variables[lon_name]
+
+    lat_sw = float(lat[0, 0, 0])
+    lon_sw = float(lon[0, 0, 0])
 
     # Use WRF's sphere for the geographic source CRS so the transformer is
     # internally consistent with the projection definition.
     geo_crs = CRS.from_proj4(f"+proj=longlat +a={WRF_SPHERE_RADIUS} +b={WRF_SPHERE_RADIUS} +no_defs")
     transformer = Transformer.from_crs(geo_crs, crs, always_xy=True)
-    return transformer.transform(lon_sw, lat_sw)
+    x_sw_mass, y_sw_mass = transformer.transform(lon_sw, lat_sw)
+    return x_sw_mass, y_sw_mass, lat.shape[1], lat.shape[2]
 
 
 def _sw_corner_from_namelist(params, crs):
@@ -80,26 +94,29 @@ def _sw_corner_from_namelist(params, crs):
 
     x_ref, y_ref = transformer.transform(params["ref_lon"], params["ref_lat"])
 
-    # ref_x/ref_y are 1-indexed staggered grid positions that map to ref_lat/ref_lon.
-    # Convert to 0-indexed mass point offset.
+    # ref_x/ref_y describe the root WPS grid.  Convert that reference location
+    # to the root-domain SW mass point, then add the selected nest's accumulated
+    # parent-grid offset.
     i_ref = params["ref_x"] - 1.0   # staggered i → subtract 0.5 for mass point
     j_ref = params["ref_y"] - 1.0   # staggered j
     i_ref_mass = i_ref - 0.5
     j_ref_mass = j_ref - 0.5
 
-    x_sw_mass = x_ref - i_ref_mass * params["dx"]
-    y_sw_mass = y_ref - j_ref_mass * params["dy"]
+    root_x_sw_mass = x_ref - i_ref_mass * params["root_dx"]
+    root_y_sw_mass = y_ref - j_ref_mass * params["root_dy"]
+    x_sw_mass = root_x_sw_mass + params.get("x_mass_offset_from_root", 0.0)
+    y_sw_mass = root_y_sw_mass + params.get("y_mass_offset_from_root", 0.0)
     return x_sw_mass, y_sw_mass
 
 
 def read_domain_from_file(file_path, sr_x, sr_y, namelist_params=None):
-    """Build a WRFDomain by reading a WPS netCDF file.
+    """Build a WRFDomain by reading a WPS or WRF input netCDF file.
 
     Args:
-        file_path: path to any met_em*.nc or geo_em*.nc file for the domain
+        file_path: path to any met_em*.nc, geo_em*.nc, or wrfinput* file
         sr_x, sr_y: fire subgrid ratios from namelist.wps
         namelist_params: optional dict from namelist.get_domain_params(), used
-                         as fallback if XLAT_M/XLONG_M are absent
+                         as fallback if mass-grid lat/lon arrays are absent
 
     Returns:
         WRFDomain dataclass
@@ -117,14 +134,13 @@ def read_domain_from_file(file_path, sr_x, sr_y, namelist_params=None):
         crs = build_wrf_crs(map_proj, truelat1, truelat2, stand_lon)
 
         try:
-            x_sw_mass, y_sw_mass = _sw_corner_from_wps(ds, crs)
-            ny = ds.variables["XLAT_M"].shape[1]
-            nx = ds.variables["XLAT_M"].shape[2]
-        except KeyError:
+            x_sw_mass, y_sw_mass, ny, nx = _sw_corner_from_file(ds, crs)
+        except KeyError as exc:
             if namelist_params is None:
                 raise RuntimeError(
-                    "XLAT_M/XLONG_M not found in file and no namelist_params supplied"
-                )
+                    "Mass-grid latitude/longitude variables not found in file "
+                    "and no namelist_params supplied"
+                ) from exc
             x_sw_mass, y_sw_mass = _sw_corner_from_namelist(namelist_params, crs)
             nx = namelist_params["e_we"] - 1
             ny = namelist_params["e_sn"] - 1

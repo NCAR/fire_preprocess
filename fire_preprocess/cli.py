@@ -76,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fire_preprocess",
         description=(
-            "Add CFBM fire fields (NFUEL_CAT, ZSF) directly to WPS netCDF files,\n"
+            "Add CFBM fire fields (NFUEL_CAT, ZSF) directly to WRF/WPS netCDF files,\n"
             "bypassing GEOGRID.TBL editing and geogrid binary format conversion."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -98,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--wps-files", default=None, metavar="PATH", dest="wps_files",
-        help="Path to a WPS output file (geo_em/met_em) or a glob pattern (e.g. 'met_em.d01.*.nc')",
+        help="Path to a WRF/WPS file (geo_em/met_em/wrfinput) or a glob pattern (e.g. 'met_em.d01.*.nc')",
     )
     parser.add_argument(
         "--zsf", default=None, metavar="GEOTIFF",
