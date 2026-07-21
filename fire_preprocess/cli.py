@@ -24,6 +24,7 @@ _DEFAULTS = {
     "overwrite": False,
     "zsf_source": "nationalmap",
     "download_dir": "downloads",
+    "zsf_fill": 0.0,
 }
 
 # LANDFIRE product to download when --fuel is omitted, keyed by fuel table.
@@ -84,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
         "  zsf_source: nationalmap\n"
         "  email:      you@example.org           # required for LANDFIRE downloads\n"
         "  download_dir: downloads\n"
+        "  zsf_fill:   0                         # value for missing elevation pixels\n"
     )
     parser = argparse.ArgumentParser(
         prog="fire_preprocess",
@@ -154,6 +156,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--download-dir", default=None, metavar="DIR", dest="download_dir",
         help="Directory where downloaded rasters are cached. Default: ./downloads",
+    )
+    parser.add_argument(
+        "--zsf-fill", type=float, default=None, metavar="VALUE", dest="zsf_fill",
+        help=(
+            "Value assigned to ZSF pixels with no source elevation data "
+            "(outside the DEM's extent, or nodata voids within it). Default: 0"
+        ),
     )
     parser.add_argument(
         "--fuel-table", default=None, metavar="NAME|PATH", dest="fuel_table",
@@ -304,7 +313,7 @@ def main(argv=None):
 
     # ── Reproject DEM ─────────────────────────────────────────────────────────
     print(f"Reprojecting terrain DEM: {args.zsf}")
-    zsf = reproject_dem(args.zsf, fire_grid)
+    zsf = reproject_dem(args.zsf, fire_grid, fill_value=args.zsf_fill)
     print(
         f"  ZSF shape {zsf.shape}  "
         f"range [{zsf.min():.1f}, {zsf.max():.1f}] m"

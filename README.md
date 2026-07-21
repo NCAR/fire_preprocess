@@ -121,6 +121,7 @@ All arguments can also be supplied via a YAML config file (see below).
 | `--email` | — | Email address; required by the LANDFIRE Product Service when downloading |
 | `--landfire-version` | newest full-coverage | Pin the LANDFIRE version of downloaded fuel data (e.g. `LF2023`) |
 | `--download-dir` | `downloads` | Cache directory for downloaded rasters |
+| `--zsf-fill` | `0` | Value assigned to ZSF pixels with no source elevation data (outside the DEM's extent, or nodata voids within it) |
 | `--namelist` | `namelist.wps` | Path to `namelist.wps`. Optional: if absent, `subgrid_ratio_x/y` are read from the WPS file's `sr_x`/`sr_y` global attributes (a namelist value overrides the file) |
 | `--domain` | `1` | Domain number, used to read the correct `subgrid_ratio_x/y` from the namelist |
 | `--fuel-table` | `fbfm13` | Fuel remapping table (see below) |
@@ -142,6 +143,7 @@ overwrite:  false
 zsf_source: nationalmap
 email:      you@example.org       # required for LANDFIRE downloads
 download_dir: downloads
+zsf_fill:   0                     # value for missing elevation pixels
 ```
 
 Run with a config file:
