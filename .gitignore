@@ -2,3 +2,5 @@
 *.grb2
 *.grib2
 FILE:*
+__pycache__/
+downloads/

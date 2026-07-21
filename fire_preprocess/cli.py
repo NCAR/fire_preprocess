@@ -7,13 +7,13 @@ import sys
 import yaml
 
 from .namelist import get_fire_subgrid_ratios, get_domain_params
-from .wrf_domain import read_domain_from_file
+from .wrf_domain import read_domain_from_file, read_subgrid_ratios_from_file
 from .fire_grid import build_fire_grid
 from .raster import reproject_fuel, reproject_dem
 from .fuel_tables import get_fuel_table, list_fuel_tables
 from .wps_io import check_existing_fire_vars, prompt_overwrite, write_fire_vars
 
-_REQUIRED = ("wps_files", "zsf", "fuel", "namelist")
+_REQUIRED = ("wps_files",)
 
 # Defaults applied after CLI + config are merged, so neither source
 # can be mistaken for an explicit user value.
@@ -22,6 +22,16 @@ _DEFAULTS = {
     "domain": 1,
     "namelist": "namelist.wps",
     "overwrite": False,
+    "zsf_source": "nationalmap",
+    "download_dir": "downloads",
+    "zsf_fill": 0.0,
+}
+
+# LANDFIRE product to download when --fuel is omitted, keyed by fuel table.
+_FUEL_TABLE_PRODUCT = {
+    "fbfm13": "FBFM13",
+    "fbfm40": "FBFM40",
+    "fbfm40_to_anderson13": "FBFM40",
 }
 
 
@@ -66,12 +76,16 @@ def _merge(args: argparse.Namespace, cfg: dict) -> argparse.Namespace:
 def build_parser() -> argparse.ArgumentParser:
     config_example = (
         "  wps_files:  'met_em.d01.*.nc'\n"
-        "  zsf:        /path/to/highres_dem.tif\n"
-        "  fuel:       /path/to/landfire.tif\n"
+        "  zsf:        /path/to/highres_dem.tif   # omit to download automatically\n"
+        "  fuel:       /path/to/landfire.tif      # omit to download automatically\n"
         "  namelist:   namelist.wps\n"
         "  fuel_table: fbfm13\n"
         "  domain:     1\n"
         "  overwrite:  false\n"
+        "  zsf_source: nationalmap\n"
+        "  email:      you@example.org           # required for LANDFIRE downloads\n"
+        "  download_dir: downloads\n"
+        "  zsf_fill:   0                         # value for missing elevation pixels\n"
     )
     parser = argparse.ArgumentParser(
         prog="fire_preprocess",
@@ -102,15 +116,53 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--zsf", default=None, metavar="GEOTIFF",
-        help="High-resolution terrain DEM GeoTIFF (ZSF source; ≥1/3 arc-sec recommended)",
+        help=(
+            "High-resolution terrain DEM GeoTIFF (ZSF source; ≥1/3 arc-sec recommended). "
+            "If omitted, the DEM is downloaded automatically (see --zsf-source)."
+        ),
     )
     parser.add_argument(
         "--fuel", default=None, metavar="GEOTIFF",
-        help="LANDFIRE fuel-category GeoTIFF (NFUEL_CAT source)",
+        help=(
+            "LANDFIRE fuel-category GeoTIFF (NFUEL_CAT source). If omitted, the fuel "
+            "layer matching --fuel-table is downloaded automatically from LANDFIRE."
+        ),
     )
     parser.add_argument(
         "--namelist", default=None, metavar="FILE",
-        help="Path to namelist.wps (provides subgrid_ratio_x/y and projection parameters)",
+        help=(
+            "Path to namelist.wps. Optional: subgrid_ratio_x/y are read from the WPS "
+            "file's sr_x/sr_y global attributes when the namelist is absent."
+        ),
+    )
+    parser.add_argument(
+        "--zsf-source", default=None, choices=("nationalmap", "landfire"), dest="zsf_source",
+        help=(
+            "Source for automatic ZSF download: 'nationalmap' = USGS 3DEP 1/3 arc-sec "
+            "(~10 m, default), 'landfire' = LANDFIRE elevation (30 m, smaller download)"
+        ),
+    )
+    parser.add_argument(
+        "--email", default=None, metavar="ADDRESS",
+        help="Email address, required by the LANDFIRE Product Service for downloads",
+    )
+    parser.add_argument(
+        "--landfire-version", default=None, metavar="LFxxxx", dest="landfire_version",
+        help=(
+            "Pin the LANDFIRE version for downloaded fuel data (e.g. LF2023). "
+            "Default: newest version with full geographic coverage"
+        ),
+    )
+    parser.add_argument(
+        "--download-dir", default=None, metavar="DIR", dest="download_dir",
+        help="Directory where downloaded rasters are cached. Default: ./downloads",
+    )
+    parser.add_argument(
+        "--zsf-fill", type=float, default=None, metavar="VALUE", dest="zsf_fill",
+        help=(
+            "Value assigned to ZSF pixels with no source elevation data "
+            "(outside the DEM's extent, or nodata voids within it). Default: 0"
+        ),
     )
     parser.add_argument(
         "--fuel-table", default=None, metavar="NAME|PATH", dest="fuel_table",
@@ -145,6 +197,8 @@ def main(argv=None):
             f"The following arguments are required: {', '.join(missing)}\n"
             "Supply them on the command line or via --config."
         )
+    if args.zsf_source not in ("nationalmap", "landfire"):
+        parser.error(f"zsf_source must be 'nationalmap' or 'landfire', got '{args.zsf_source}'")
 
     # ── Find WPS files ─────────────────────────────────────────────────────
     print(f"Searching for WPS file(s): {args.wps_files}")
@@ -154,12 +208,36 @@ def main(argv=None):
     basenames = [os.path.basename(f) for f in files]
     print(f"  Found {len(files)} file(s): {basenames}")
 
-    # ── Read namelist ─────────────────────────────────────────────────────────
+    # ── Determine fire subgrid ratios and domain parameters ──────────────────
+    # An explicit namelist value wins (e.g. adding a fire grid to a geo_em file
+    # generated without one); otherwise the WPS file's sr_x/sr_y attributes are used.
     domain_index = args.domain - 1  # namelist arrays are 0-indexed, domain numbers are 1-indexed
-    print(f"Reading namelist: {args.namelist}")
-    sr_x, sr_y = get_fire_subgrid_ratios(args.namelist, domain_index=domain_index)
-    print(f"  subgrid_ratio_x = {sr_x},  subgrid_ratio_y = {sr_y}")
-    nml_params = get_domain_params(args.namelist, domain_index=domain_index)
+    file_sr = read_subgrid_ratios_from_file(files[0])
+    nml_sr = (None, None)
+    nml_params = None
+    if os.path.isfile(args.namelist):
+        print(f"Reading namelist: {args.namelist}")
+        nml_sr = get_fire_subgrid_ratios(args.namelist, domain_index=domain_index)
+        nml_params = get_domain_params(args.namelist, domain_index=domain_index)
+
+    if nml_sr[0] is not None:
+        sr_x, sr_y = nml_sr
+        sr_source = args.namelist
+        if file_sr[0] is not None and file_sr != nml_sr:
+            print(
+                f"  Note: {basenames[0]} has sr_x/sr_y = {file_sr[0]}/{file_sr[1]}; "
+                f"using the namelist values {sr_x}/{sr_y} instead."
+            )
+    elif file_sr[0] is not None:
+        sr_x, sr_y = file_sr
+        sr_source = f"{basenames[0]} global attributes"
+    else:
+        parser.error(
+            f"Fire subgrid ratios not found: '{basenames[0]}' has no sr_x/sr_y global "
+            f"attributes and no namelist with subgrid_ratio_x/y was found at "
+            f"'{args.namelist}'. Supply --namelist."
+        )
+    print(f"  subgrid_ratio_x = {sr_x},  subgrid_ratio_y = {sr_y}  (from {sr_source})")
 
     # ── Build WRF domain geometry ─────────────────────────────────────────────
     print(f"Reading domain geometry from {basenames[0]} ...")
@@ -179,6 +257,51 @@ def main(argv=None):
     fuel_table = get_fuel_table(args.fuel_table)
     print(f"Fuel table: {fuel_table.name}  —  {fuel_table.description}")
 
+    # ── Download any missing source rasters ───────────────────────────────────
+    if args.fuel is None or args.zsf is None:
+        # Imported lazily so environments without `requests` can still run
+        # with locally supplied rasters.
+        from .download import (
+            fire_grid_bbox_wgs84, bbox_tag, resolve_landfire_layer,
+            download_landfire, download_usgs_dem,
+        )
+        bbox = fire_grid_bbox_wgs84(fire_grid)
+        tag = bbox_tag(bbox)
+        os.makedirs(args.download_dir, exist_ok=True)
+        print(
+            f"Download area (WGS84): W={bbox[0]:.4f}  S={bbox[1]:.4f}  "
+            f"E={bbox[2]:.4f}  N={bbox[3]:.4f}"
+        )
+
+        if args.fuel is None:
+            product = _FUEL_TABLE_PRODUCT.get(fuel_table.name)
+            if product is None:
+                parser.error(
+                    "--fuel is required when using a custom fuel table "
+                    "(cannot infer which LANDFIRE product to download)."
+                )
+            print(f"No fuel raster given; downloading {product} from LANDFIRE ...")
+            layer = resolve_landfire_layer(product, args.landfire_version)
+            args.fuel = download_landfire(
+                layer, bbox, os.path.join(args.download_dir, f"{layer}_{tag}.tif"),
+                args.email,
+            )
+
+        if args.zsf is None:
+            if args.zsf_source == "landfire":
+                print("No terrain DEM given; downloading elevation from LANDFIRE ...")
+                layer = resolve_landfire_layer("Elev")
+                args.zsf = download_landfire(
+                    layer, bbox, os.path.join(args.download_dir, f"{layer}_{tag}.tif"),
+                    args.email,
+                )
+            else:
+                print("No terrain DEM given; downloading 1/3 arc-second DEM from the USGS National Map ...")
+                args.zsf = download_usgs_dem(
+                    bbox, args.download_dir,
+                    os.path.join(args.download_dir, f"USGS_3DEP_13as_{tag}.tif"),
+                )
+
     # ── Reproject fuel categories ─────────────────────────────────────────────
     print(f"Reprojecting fuel data: {args.fuel}")
     nfuel_raw = reproject_fuel(args.fuel, fire_grid)
@@ -190,7 +313,7 @@ def main(argv=None):
 
     # ── Reproject DEM ─────────────────────────────────────────────────────────
     print(f"Reprojecting terrain DEM: {args.zsf}")
-    zsf = reproject_dem(args.zsf, fire_grid)
+    zsf = reproject_dem(args.zsf, fire_grid, fill_value=args.zsf_fill)
     print(
         f"  ZSF shape {zsf.shape}  "
         f"range [{zsf.min():.1f}, {zsf.max():.1f}] m"

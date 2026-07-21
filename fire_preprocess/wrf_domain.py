@@ -92,6 +92,20 @@ def _sw_corner_from_namelist(params, crs):
     return x_sw_mass, y_sw_mass
 
 
+def read_subgrid_ratios_from_file(file_path):
+    """Return (sr_x, sr_y) from a WPS file's global attributes, or (None, None).
+
+    geogrid writes the per-domain subgrid_ratio_x/y values to geo_em files as
+    the global attributes sr_x/sr_y (and metgrid copies them to met_em files),
+    so a namelist.wps is not needed when these attributes are present.
+    """
+    with nc.Dataset(file_path) as ds:
+        try:
+            return int(ds.getncattr("sr_x")), int(ds.getncattr("sr_y"))
+        except AttributeError:
+            return None, None
+
+
 def read_domain_from_file(file_path, sr_x, sr_y, namelist_params=None):
     """Build a WRFDomain by reading a WPS netCDF file.
 

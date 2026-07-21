@@ -24,15 +24,44 @@ pip install -r requirements.txt
 
 ---
 
-## 2. Retrieving input data
+## 2. Input data
 
-Two datasets are required. Both are available as GeoTIFF and can be downloaded
-for any region of the contiguous US.
+Two source datasets are needed: LANDFIRE fuel categories (NFUEL_CAT) and a
+high-resolution terrain DEM (ZSF). By default both are **downloaded
+automatically** for the exact WRF domain; supplying local GeoTIFF files with
+`--fuel` / `--zsf` is still supported.
 
-### Fuel categories (NFUEL_CAT)
+### Automatic download (default)
 
-Download from the **LANDFIRE data viewer**:
-<https://landfire.gov/viewer/>
+If `--fuel` or `--zsf` is not given, the tool computes the domain's bounding
+box (plus a 2 km buffer) and fetches the data itself:
+
+- **NFUEL_CAT** — requested from the [LANDFIRE Product Service
+  (LFPS)](https://lfps.usgs.gov). The product matches `--fuel-table`
+  (`fbfm13` → FBFM13, `fbfm40`/`fbfm40_to_anderson13` → FBFM40), using the
+  newest full-coverage LANDFIRE version (pin one with `--landfire-version`,
+  e.g. `LF2023`). *LFPS requires an email address* (`--email`), used by
+  LANDFIRE only for usage reporting.
+- **ZSF** — from the USGS National Map (3DEP **1/3 arc-second**, ~10 m) by
+  default. The required 1°×1° tiles (~350 MB each) are downloaded and
+  merged/clipped to the domain. Alternatively `--zsf-source landfire` fetches
+  LANDFIRE's 30 m elevation through LFPS instead — a much smaller download at
+  the cost of resolution.
+
+Everything lands in `--download-dir` (default `./downloads`) and is cached:
+re-running the tool for the same domain reuses the existing files, and DEM
+tiles are shared between overlapping domains.
+
+```bash
+python fire_preprocess.py --wps-files geo_em.d03.nc --email you@example.org
+```
+
+### Manual download
+
+Both datasets are also available interactively as GeoTIFF for any region of
+the contiguous US.
+
+**Fuel categories** — from the [LANDFIRE data viewer](https://landfire.gov/viewer/):
 
 1. Draw your area of interest on the map.
 2. Under *Fire Behavior Fuel Models*, select either:
@@ -44,10 +73,8 @@ Download from the **LANDFIRE data viewer**:
    rio merge LF2025_FBFM13_*.tif --output fuel.tif
    ```
 
-### High-resolution terrain (ZSF)
-
-Download from the **USGS National Map / 3D Elevation Program (3DEP)**:
-<https://apps.nationalmap.gov/downloader/>
+**High-resolution terrain** — from the [USGS National Map / 3D Elevation
+Program (3DEP)](https://apps.nationalmap.gov/downloader/):
 
 1. Under *Elevation Products (3DEP)*, select **1/3 Arc-Second DEM** (~10 m).
    1 Arc-Second (~30 m) is also available if coarser resolution is acceptable.
@@ -62,6 +89,15 @@ Download from the **USGS National Map / 3D Elevation Program (3DEP)**:
 ## 3. Running the tool
 
 ### Command-line usage
+
+Minimal — settings are read from the WPS file itself and both rasters are
+downloaded automatically:
+
+```bash
+python fire_preprocess.py --wps-files geo_em.d02.nc --email you@example.org
+```
+
+With local input files:
 
 ```bash
 python fire_preprocess.py \
@@ -79,9 +115,14 @@ All arguments can also be supplied via a YAML config file (see below).
 | Argument | Default | Description |
 |---|---|---|
 | `--wps-files` | — | WPS output file (`geo_em`/`met_em`) or glob pattern (e.g. `'met_em.d02.*.nc'`) |
-| `--fuel` | — | LANDFIRE fuel-category GeoTIFF (NFUEL_CAT source) |
-| `--zsf` | — | High-resolution terrain DEM GeoTIFF (ZSF source) |
-| `--namelist` | `namelist.wps` | Path to `namelist.wps` |
+| `--fuel` | *download* | LANDFIRE fuel-category GeoTIFF (NFUEL_CAT source); downloaded automatically if omitted |
+| `--zsf` | *download* | High-resolution terrain DEM GeoTIFF (ZSF source); downloaded automatically if omitted |
+| `--zsf-source` | `nationalmap` | Source for automatic ZSF download: `nationalmap` (USGS 3DEP 1/3 arc-sec, ~10 m) or `landfire` (30 m, much smaller download) |
+| `--email` | — | Email address; required by the LANDFIRE Product Service when downloading |
+| `--landfire-version` | newest full-coverage | Pin the LANDFIRE version of downloaded fuel data (e.g. `LF2023`) |
+| `--download-dir` | `downloads` | Cache directory for downloaded rasters |
+| `--zsf-fill` | `0` | Value assigned to ZSF pixels with no source elevation data (outside the DEM's extent, or nodata voids within it) |
+| `--namelist` | `namelist.wps` | Path to `namelist.wps`. Optional: if absent, `subgrid_ratio_x/y` are read from the WPS file's `sr_x`/`sr_y` global attributes (a namelist value overrides the file) |
 | `--domain` | `1` | Domain number, used to read the correct `subgrid_ratio_x/y` from the namelist |
 | `--fuel-table` | `fbfm13` | Fuel remapping table (see below) |
 | `--overwrite` | `false` | Overwrite existing fire fields without prompting |
@@ -93,12 +134,16 @@ Any argument can be set in a YAML config file. CLI flags override config values.
 
 ```yaml
 wps_files:  'met_em.d02.2024-09-08_*.nc'
-zsf:        /path/to/dem.tif
-fuel:       /path/to/fuel.tif
+zsf:        /path/to/dem.tif      # omit to download automatically
+fuel:       /path/to/fuel.tif     # omit to download automatically
 namelist:   namelist.wps
 fuel_table: fbfm13
 domain:     2
 overwrite:  false
+zsf_source: nationalmap
+email:      you@example.org       # required for LANDFIRE downloads
+download_dir: downloads
+zsf_fill:   0                     # value for missing elevation pixels
 ```
 
 Run with a config file:
