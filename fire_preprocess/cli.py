@@ -4,12 +4,14 @@ import glob
 import os
 import sys
 
+import numpy as np
 import yaml
 
 from .namelist import get_fire_subgrid_ratios, get_domain_params
 from .wrf_domain import read_domain_from_file
 from .fire_grid import build_fire_grid
 from .raster import reproject_fuel, reproject_dem
+from .slope import compute_slope
 from .fuel_tables import get_fuel_table, list_fuel_tables
 from .wps_io import check_existing_fire_vars, prompt_overwrite, write_fire_vars
 
@@ -125,7 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--overwrite", action="store_true", default=False,
-        help="Overwrite existing NFUEL_CAT/ZSF variables without prompting",
+        help="Overwrite existing fire variables without prompting",
     )
     return parser
 
@@ -196,6 +198,14 @@ def main(argv=None):
         f"range [{zsf.min():.1f}, {zsf.max():.1f}] m"
     )
 
+    # ── Terrain gradients ─────────────────────────────────────────────────────
+    dzdxf, dzdyf = compute_slope(zsf, fire_grid)
+    grad_max = float(np.hypot(dzdxf, dzdyf).max())
+    print(
+        f"Terrain gradients from ZSF: max |grad| = {grad_max:.3f} "
+        f"({np.degrees(np.arctan(grad_max)):.1f}° slope)"
+    )
+
     # ── Write to WPS files ─────────────────────────────────────────────────
     skipped = 0
     for file_path in files:
@@ -213,6 +223,7 @@ def main(argv=None):
         print(f"  Writing {label} ... ", end="", flush=True)
         write_fire_vars(
             file_path, nfuel, zsf, sr_x, sr_y,
+            dzdxf=dzdxf, dzdyf=dzdyf,
             nfuel_description=f"Fuel category for fire model ({fuel_table.description})",
             zsf_description=f"Topography height; source: {os.path.basename(args.zsf)}",
             overwrite=overwrite,

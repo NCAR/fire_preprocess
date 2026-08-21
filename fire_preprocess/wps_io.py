@@ -4,7 +4,7 @@ import os
 import netCDF4 as nc
 import numpy as np
 
-FIRE_VARS = frozenset({"NFUEL_CAT", "ZSF"})
+FIRE_VARS = frozenset({"NFUEL_CAT", "ZSF", "DZDXF", "DZDYF"})
 
 _DIM_SN = "south_north_subgrid"
 _DIM_WE = "west_east_subgrid"
@@ -49,54 +49,28 @@ def _ensure_dim(ds, name, size):
             )
 
 
-def _write_nfuel_cat(ds, data: np.ndarray, sr_x: int, sr_y: int,
-                     description: str, overwrite: bool):
+def _write_subgrid_var(ds, name: str, data: np.ndarray, sr_x: int, sr_y: int,
+                       description: str, units: str, overwrite: bool):
+    """Create or replace one fire-subgrid variable, attributes included."""
     ny, nx = data.shape
     _ensure_dim(ds, _DIM_SN, ny)
     _ensure_dim(ds, _DIM_WE, nx)
 
-    if "NFUEL_CAT" in ds.variables:
+    if name in ds.variables:
         if not overwrite:
-            raise RuntimeError("NFUEL_CAT already exists; pass overwrite=True to replace it.")
-        ds.variables["NFUEL_CAT"][0] = data
+            raise RuntimeError(f"{name} already exists; pass overwrite=True to replace it.")
+        ds.variables[name][0] = data
         return
 
     var = ds.createVariable(
-        "NFUEL_CAT", "f4",
+        name, "f4",
         ("Time", _DIM_SN, _DIM_WE),
         fill_value=False,
     )
     var.FieldType = np.int32(104)
     var.MemoryOrder = "XY "
     var.description = description
-    var.units = ""
-    var.stagger = "M"
-    var.sr_x = np.int32(sr_x)
-    var.sr_y = np.int32(sr_y)
-    var[0] = data
-
-
-def _write_zsf(ds, data: np.ndarray, sr_x: int, sr_y: int,
-               description: str, overwrite: bool):
-    ny, nx = data.shape
-    _ensure_dim(ds, _DIM_SN, ny)
-    _ensure_dim(ds, _DIM_WE, nx)
-
-    if "ZSF" in ds.variables:
-        if not overwrite:
-            raise RuntimeError("ZSF already exists; pass overwrite=True to replace it.")
-        ds.variables["ZSF"][0] = data
-        return
-
-    var = ds.createVariable(
-        "ZSF", "f4",
-        ("Time", _DIM_SN, _DIM_WE),
-        fill_value=False,
-    )
-    var.FieldType = np.int32(104)
-    var.MemoryOrder = "XY "
-    var.description = description
-    var.units = "meters MSL"
+    var.units = units
     var.stagger = "M"
     var.sr_x = np.int32(sr_x)
     var.sr_y = np.int32(sr_y)
@@ -111,13 +85,15 @@ def write_fire_vars(
     zsf: np.ndarray,
     sr_x: int,
     sr_y: int,
+    dzdxf: np.ndarray,
+    dzdyf: np.ndarray,
     nfuel_description: str = "Fuel category for fire model",
     zsf_description: str = "Topography height",
     overwrite: bool = False,
 ) -> None:
-    """Write NFUEL_CAT and ZSF into a WPS netCDF file, modifying it in-place.
+    """Write the fire fields into a WPS netCDF file, modifying it in-place.
 
-    Both variables are written on south_north_subgrid × west_east_subgrid,
+    All variables are written on south_north_subgrid × west_east_subgrid,
     sized (ny_mass + 1) * sr_y × (nx_mass + 1) * sr_x = e_sn*sr_y × e_we*sr_x.
 
     Args:
@@ -126,10 +102,28 @@ def write_fire_vars(
         zsf:               float32 array, shape (ny_fire, nx_fire), row 0 = southernmost
         sr_x:              fire subgrid ratio, west-east (written as variable attribute)
         sr_y:              fire subgrid ratio, south-north (written as variable attribute)
+        dzdxf, dzdyf:      terrain gradients from slope.compute_slope(); required,
+                           since a new ZSF with stale gradients is inconsistent
         nfuel_description: written to NFUEL_CAT:description
         zsf_description:   written to ZSF:description
         overwrite:         if True, silently overwrite any existing fire variables
     """
     with nc.Dataset(path, "r+") as ds:
-        _write_nfuel_cat(ds, nfuel_cat, sr_x, sr_y, nfuel_description, overwrite)
-        _write_zsf(ds, zsf, sr_x, sr_y, zsf_description, overwrite)
+        _write_subgrid_var(
+            ds, "NFUEL_CAT", nfuel_cat, sr_x, sr_y,
+            description=nfuel_description, units="", overwrite=overwrite,
+        )
+        _write_subgrid_var(
+            ds, "ZSF", zsf, sr_x, sr_y,
+            description=zsf_description, units="meters MSL", overwrite=overwrite,
+        )
+        # description/units match geogrid's df_dx/df_dy output so the file is
+        # indistinguishable from a standard GEOGRID.TBL.FIRE product.
+        _write_subgrid_var(
+            ds, "DZDXF", dzdxf, sr_x, sr_y,
+            description="df/dx", units="-", overwrite=overwrite,
+        )
+        _write_subgrid_var(
+            ds, "DZDYF", dzdyf, sr_x, sr_y,
+            description="df/dy", units="-", overwrite=overwrite,
+        )
