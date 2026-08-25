@@ -166,3 +166,18 @@ reprojects to the WRF fire subgrid using the projection parameters and
 `subgrid_ratio_x/y` values from `namelist.wps`, and writes the fire fields
 into the existing WPS netCDF files. The rest of the workflow
 (`real.exe` → WRF) is unchanged.
+
+### Clipped source rasters
+
+The fuel and high-resolution DEM GeoTIFFs may cover only the intended fire
+area. Outside their joint valid coverage, `NFUEL_CAT` is set to the selected
+fuel table's no-fuel category. `ZSF` remains finite over the full fire array by
+bilinearly interpolating the atmospheric `HGT_M` field to the fire grid, then
+overlaying the high-resolution DEM where both rasters are valid.
+
+`DZDXF` and `DZDYF` are calculated from the merged `ZSF` using centered
+differences in the interior, one-sided differences at array edges, and WRF
+projection map factors. Both gradients are set to zero wherever their
+two-dimensional finite-difference stencil crosses the clipped-data boundary.
+This prevents a terrain discontinuity at the boundary from entering the fire
+spread calculation.

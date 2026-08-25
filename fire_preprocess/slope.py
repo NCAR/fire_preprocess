@@ -1,104 +1,136 @@
-"""Compute fire-grid terrain gradients (DZDXF, DZDYF) from ZSF.
+#!/usr/bin/env python3
+# Copyright 2026      Research Applications Laboratory (RAL),
+#                     National Center for Atmospheric Research (NCAR),
+#                     University Corporation for Atmospheric Research (UCAR)
+#
+#--------------------------------------------------------------------------------
+# Created by Maria Frediani (frediani@ucar.edu) on 2026-08-25
+#--------------------------------------------------------------------------------
+# run /glade/work/frediani/casper/anaconda3/envs/py314/bin/python -m unittest tests.test_slope
+#
+"""Compute WRF-compatible fire-grid terrain gradients from merged ZSF."""
 
-For real cases these two fields are read from the input file and never
-recomputed: WRF-CFBM passes grid%dzdxf/dzdyf into Init_fire_state_within_wrf
-(dyn_em/start_em.F), and state_mod.F90 assigns them straight into the fire
-state.  Only the idealized initializer (dyn_em/module_initialize_fire.F)
-derives them from ZSF.  So whenever ZSF is replaced, DZDXF/DZDYF have to be
-replaced with it, or slope makes no contribution to the rate of spread.
+from __future__ import annotations
 
-The stencil matches geogrid's calc_dfdx/calc_dfdy in
-WPS geogrid/src/process_tile_module.f90: a centred difference over two fire
-cells in the interior, one-sided at the domain edges.
-
-The map scale factor is applied, so the gradients stay correct on domains
-large enough for it to depart appreciably from 1.  Note that the sense of the
-correction here is the opposite of geogrid's: WRF measures grid spacing in
-projection space and takes the true distance between grid points to be
-dx/MAPFAC (dyn_em/module_diffusion_em.F builds its physical mixing length as
-sqrt(dx/msftx * dy/msfty)), so a physical gradient must *multiply* by the map
-factor.  geogrid's calc_dfdx divides by it instead.
-"""
 import numpy as np
 from pyproj import CRS, Proj, Transformer
 
+from .fire_grid import FireGrid
 from .wrf_domain import WRF_SPHERE_RADIUS
 
 
-def map_scale_factors(fire_grid):
-    """Return (mapfac_x, mapfac_y) at fire-grid cell centres.
+#--------------------------------------------------------------------------------
+# Projection scaling
+#--------------------------------------------------------------------------------
 
-    Both arrays are float64, shaped (ny_fire, nx_fire), in WRF row order with
-    row 0 southernmost so they align with ZSF.  For the conformal projections
-    WRF supports these two are equal to within roundoff; they are returned
-    separately anyway, mirroring geogrid's use of MAPFAC_MX and MAPFAC_MY.
-
-    A geographic (lat-lon) fire grid gets 1.0, since its spacing is in degrees
-    rather than projected metres and the metric terms do not apply.
-    """
-    ny, nx = fire_grid.ny_fire, fire_grid.nx_fire
-    ones = np.ones((ny, nx))
+def _apply_map_scale(
+    dzdxf: np.ndarray,
+    dzdyf: np.ndarray,
+    fire_grid: FireGrid,
+    apply_mask: np.ndarray | None = None,
+) -> None:
+    """Apply WRF-compatible projection factors without full-domain work arrays."""
     if fire_grid.crs.is_geographic:
-        return ones, ones
+        return
 
-    # from_origin() yields an axis-aligned transform, so cell centres separate
-    # into an independent 1-D x and 1-D y sequence.
-    t = fire_grid.transform
-    xs = t.c + (np.arange(nx) + 0.5) * t.a
-    ys = t.f + (np.arange(ny) + 0.5) * t.e
-    xg, yg = np.meshgrid(xs, ys)
+    ny, nx = dzdxf.shape
+    if apply_mask is None:
+        row_start, row_stop = 0, ny
+        column_start, column_stop = 0, nx
+    else:
+        valid_rows, valid_columns = np.nonzero(apply_mask)
+        if valid_rows.size == 0:
+            return
+        row_start, row_stop = valid_rows.min(), valid_rows.max() + 1
+        column_start, column_stop = valid_columns.min(), valid_columns.max() + 1
 
-    geo_crs = CRS.from_proj4(
+    transform = fire_grid.transform
+    columns = np.arange(column_start, column_stop)
+    xs = transform.c + (columns + 0.5) * transform.a
+    geographic_crs = CRS.from_proj4(
         f"+proj=longlat +a={WRF_SPHERE_RADIUS} +b={WRF_SPHERE_RADIUS} +no_defs"
     )
-    lon, lat = Transformer.from_crs(
-        fire_grid.crs, geo_crs, always_xy=True
-    ).transform(xg, yg)
+    transformer = Transformer.from_crs(
+        fire_grid.crs, geographic_crs, always_xy=True
+    )
+    projection = Proj(fire_grid.crs)
 
-    factors = Proj(fire_grid.crs).get_factors(lon, lat, radians=False)
-    mfx = np.asarray(factors.parallel_scale, dtype=np.float64)
-    mfy = np.asarray(factors.meridional_scale, dtype=np.float64)
+    # Fire arrays use south-to-north row order. Raster transforms use the
+    # opposite ordering, so select projected y coordinates from north to south.
+    chunk_rows = 256
+    for start in range(row_start, row_stop, chunk_rows):
+        stop = min(start + chunk_rows, row_stop)
+        wrf_rows = np.arange(start, stop)
+        raster_rows = ny - 1 - wrf_rows
+        ys = transform.f + (raster_rows + 0.5) * transform.e
+        x_grid, y_grid = np.meshgrid(xs, ys)
+        lon, lat = transformer.transform(x_grid, y_grid)
+        factors = projection.get_factors(lon, lat, radians=False)
+        selection = (slice(start, stop), slice(column_start, column_stop))
+        dzdxf[selection] *= np.asarray(factors.parallel_scale, dtype=np.float32)
+        dzdyf[selection] *= np.asarray(factors.meridional_scale, dtype=np.float32)
 
-    # Row 0 of the transform is the northernmost row; ZSF is south-first.
-    return np.flipud(mfx), np.flipud(mfy)
+
+#--------------------------------------------------------------------------------
+# Finite-difference gradients
+#--------------------------------------------------------------------------------
+
+def gradient_coverage_mask(valid_mask: np.ndarray) -> np.ndarray:
+    """Require valid high-resolution data over each two-dimensional stencil."""
+    valid = np.asarray(valid_mask, dtype=bool)
+    if valid.ndim != 2:
+        raise ValueError(f"coverage mask must be two-dimensional, got {valid.shape}")
+    stencil = valid.copy()
+    stencil[:, 1:-1] &= valid[:, :-2] & valid[:, 2:]
+    stencil[:, 0] &= valid[:, 1]
+    stencil[:, -1] &= valid[:, -2]
+    stencil[1:-1, :] &= valid[:-2, :] & valid[2:, :]
+    stencil[0, :] &= valid[1, :]
+    stencil[-1, :] &= valid[-2, :]
+    return stencil
 
 
-def compute_slope(zsf: np.ndarray, fire_grid):
-    """Return (dzdxf, dzdyf) as float32 arrays shaped like *zsf*.
-
-    Args:
-        zsf:       terrain height on the fire grid, shape (ny_fire, nx_fire),
-                   row 0 = southernmost (WRF/WPS netCDF order)
-        fire_grid: the FireGrid the terrain was reprojected onto; supplies the
-                   cell spacing and the projection the map factor comes from
-
-    Because row 0 is the southernmost row, axis 0 increases northward and
-    axis 1 increases eastward, so both gradients are positive uphill toward
-    increasing x/y — the same sign convention WRF-Fire expects.
-    """
-    z = np.asarray(zsf, dtype=np.float64)
-    if z.shape[0] < 2 or z.shape[1] < 2:
-        raise ValueError(f"ZSF must be at least 2x2 to differentiate; got {z.shape}")
-    if z.shape != (fire_grid.ny_fire, fire_grid.nx_fire):
+def compute_slope(
+    zsf: np.ndarray,
+    fire_grid: FireGrid,
+    valid_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return dimensionless x and y terrain gradients derived from ZSF."""
+    zsf_values = np.asarray(zsf, dtype=np.float32)
+    expected_shape = (fire_grid.ny_fire, fire_grid.nx_fire)
+    if zsf_values.shape != expected_shape:
         raise ValueError(
-            f"ZSF shape {z.shape} does not match the fire grid "
-            f"({fire_grid.ny_fire}, {fire_grid.nx_fire})"
+            f"ZSF shape {zsf_values.shape} does not match the fire grid {expected_shape}"
         )
+    if zsf_values.shape[0] < 2 or zsf_values.shape[1] < 2:
+        raise ValueError(f"ZSF must be at least 2 x 2, got {zsf_values.shape}")
+    if not np.isfinite(zsf_values).all():
+        raise ValueError("ZSF must be finite before terrain gradients are calculated")
 
+    dzdxf = np.empty_like(zsf_values)
+    dzdyf = np.empty_like(zsf_values)
     dx_fire, dy_fire = fire_grid.dx, fire_grid.dy
-    dzdxf = np.empty_like(z)
-    dzdyf = np.empty_like(z)
 
-    dzdxf[:, 1:-1] = (z[:, 2:] - z[:, :-2]) / (2.0 * dx_fire)
-    dzdxf[:, 0] = (z[:, 1] - z[:, 0]) / dx_fire
-    dzdxf[:, -1] = (z[:, -1] - z[:, -2]) / dx_fire
+    dzdxf[:, 1:-1] = (zsf_values[:, 2:] - zsf_values[:, :-2]) / (2.0 * dx_fire)
+    dzdxf[:, 0] = (zsf_values[:, 1] - zsf_values[:, 0]) / dx_fire
+    dzdxf[:, -1] = (zsf_values[:, -1] - zsf_values[:, -2]) / dx_fire
+    dzdyf[1:-1, :] = (zsf_values[2:, :] - zsf_values[:-2, :]) / (2.0 * dy_fire)
+    dzdyf[0, :] = (zsf_values[1, :] - zsf_values[0, :]) / dy_fire
+    dzdyf[-1, :] = (zsf_values[-1, :] - zsf_values[-2, :]) / dy_fire
 
-    dzdyf[1:-1, :] = (z[2:, :] - z[:-2, :]) / (2.0 * dy_fire)
-    dzdyf[0, :] = (z[1, :] - z[0, :]) / dy_fire
-    dzdyf[-1, :] = (z[-1, :] - z[-2, :]) / dy_fire
+    stencil = None
+    if valid_mask is not None:
+        if np.asarray(valid_mask).shape != expected_shape:
+            raise ValueError(
+                f"coverage mask shape {np.asarray(valid_mask).shape} "
+                f"does not match the fire grid {expected_shape}"
+            )
+        stencil = gradient_coverage_mask(valid_mask)
 
-    mapfac_x, mapfac_y = map_scale_factors(fire_grid)
-    dzdxf *= mapfac_x
-    dzdyf *= mapfac_y
+    _apply_map_scale(dzdxf, dzdyf, fire_grid, stencil)
+
+    if stencil is not None:
+        dzdxf[~stencil] = 0.0
+        dzdyf[~stencil] = 0.0
 
     return dzdxf.astype(np.float32), dzdyf.astype(np.float32)
