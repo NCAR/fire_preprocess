@@ -7,6 +7,11 @@ import sys
 import numpy as np
 import yaml
 
+from .coverage import (
+    interpolate_hgt_to_fire_grid,
+    merge_fire_coverage,
+    read_atmospheric_terrain,
+)
 from .namelist import get_fire_subgrid_ratios, get_domain_params
 from .wrf_domain import read_domain_from_file
 from .fire_grid import build_fire_grid
@@ -78,7 +83,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fire_preprocess",
         description=(
-            "Add CFBM fire fields (NFUEL_CAT, ZSF) directly to WPS netCDF files,\n"
+            "Add CFBM static fire fields (NFUEL_CAT, ZSF, DZDXF, DZDYF) directly\n"
+            "to WPS netCDF files,\n"
             "bypassing GEOGRID.TBL editing and geogrid binary format conversion."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -183,30 +189,42 @@ def main(argv=None):
 
     # ── Reproject fuel categories ─────────────────────────────────────────────
     print(f"Reprojecting fuel data: {args.fuel}")
-    nfuel_raw = reproject_fuel(args.fuel, fire_grid)
-    nfuel = fuel_table.apply(nfuel_raw)
+    nfuel_raw, fuel_valid = reproject_fuel(
+        args.fuel, fire_grid, return_mask=True
+    )
     print(
-        f"  NFUEL_CAT shape {nfuel.shape}  "
-        f"range [{int(nfuel.min())}, {int(nfuel.max())}]"
+        f"  Valid fuel coverage: {np.count_nonzero(fuel_valid) / fuel_valid.size:.2%}"
     )
 
     # ── Reproject DEM ─────────────────────────────────────────────────────────
     print(f"Reprojecting terrain DEM: {args.zsf}")
-    zsf = reproject_dem(args.zsf, fire_grid)
+    zsf_raw, dem_valid = reproject_dem(args.zsf, fire_grid, return_mask=True)
+    terrain, terrain_name = read_atmospheric_terrain(files[0])
+    terrain_background = interpolate_hgt_to_fire_grid(
+        terrain,
+        sr_x,
+        sr_y,
+        (fire_grid.ny_fire, fire_grid.nx_fire),
+    )
+    nfuel, zsf, high_resolution_valid = merge_fire_coverage(
+        nfuel_raw,
+        zsf_raw,
+        fuel_valid,
+        dem_valid,
+        terrain_background,
+        fuel_table,
+    )
+    dzdxf, dzdyf = compute_slope(zsf, fire_grid, high_resolution_valid)
+    coverage_fraction = np.count_nonzero(high_resolution_valid) / high_resolution_valid.size
     print(
-        f"  ZSF shape {zsf.shape}  "
-        f"range [{zsf.min():.1f}, {zsf.max():.1f}] m"
+        f"  Joint high-resolution coverage: {coverage_fraction:.2%}\n"
+        f"  ZSF background: interpolated {terrain_name}\n"
+        f"  ZSF shape {zsf.shape} range [{zsf.min():.1f}, {zsf.max():.1f}] m\n"
+        f"  Maximum |DZDXF|={np.max(np.abs(dzdxf)):.4f}, "
+        f"|DZDYF|={np.max(np.abs(dzdyf)):.4f}"
     )
 
-    # ── Terrain gradients ─────────────────────────────────────────────────────
-    dzdxf, dzdyf = compute_slope(zsf, fire_grid)
-    grad_max = float(np.hypot(dzdxf, dzdyf).max())
-    print(
-        f"Terrain gradients from ZSF: max |grad| = {grad_max:.3f} "
-        f"({np.degrees(np.arctan(grad_max)):.1f}° slope)"
-    )
-
-    # ── Write to WPS files ─────────────────────────────────────────────────
+    # ── Write to WPS files ────────────────────────────────────────────
     skipped = 0
     for file_path in files:
         label = os.path.basename(file_path)
