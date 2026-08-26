@@ -1,14 +1,27 @@
-#!/usr/bin/env python3
-# Copyright 2026      Research Applications Laboratory (RAL),
-#                     National Center for Atmospheric Research (NCAR),
-#                     University Corporation for Atmospheric Research (UCAR)
-#
-#--------------------------------------------------------------------------------
-# Created by Maria Frediani (frediani@ucar.edu) on 2026-08-25
-#--------------------------------------------------------------------------------
-# run /glade/work/frediani/casper/anaconda3/envs/py314/bin/python -m unittest tests.test_slope
-#
-"""Compute WRF-compatible fire-grid terrain gradients from merged ZSF."""
+"""Compute fire-grid terrain gradients (DZDXF, DZDYF) from merged ZSF.
+
+For real cases these two fields are read from the input file and never
+recomputed: WRF-CFBM passes grid%dzdxf/dzdyf into Init_fire_state_within_wrf
+(dyn_em/start_em.F), and state_mod.F90 assigns them straight into the fire
+state.  Only the idealized initializer (dyn_em/module_initialize_fire.F)
+derives them from ZSF.  So whenever ZSF is replaced, DZDXF/DZDYF have to be
+replaced with it, or slope makes no contribution to the rate of spread.
+
+The stencil matches geogrid's calc_dfdx/calc_dfdy in
+WPS geogrid/src/process_tile_module.f90: a centred difference over two fire
+cells in the interior, one-sided at the domain edges.  Where high-resolution
+terrain coverage is clipped, both gradients are set to zero if this stencil
+crosses the coverage boundary.
+
+The map scale factor is applied, so the gradients stay correct on domains
+large enough for it to depart appreciably from 1.  Note that the sense of the
+correction here is the opposite of geogrid's: WRF measures grid spacing in
+projection space and takes the true distance between grid points to be
+dx/MAPFAC (dyn_em/module_diffusion_em.F builds its physical mixing length as
+sqrt(dx/msftx * dy/msfty)), so a physical gradient must *multiply* by the map
+factor.  geogrid's calc_dfdx divides by it instead.  Map factors are evaluated
+in row chunks to avoid allocating full-domain coordinate and factor arrays.
+"""
 
 from __future__ import annotations
 
@@ -29,7 +42,17 @@ def _apply_map_scale(
     fire_grid: FireGrid,
     apply_mask: np.ndarray | None = None,
 ) -> None:
-    """Apply WRF-compatible projection factors without full-domain work arrays."""
+    """Apply WRF-compatible map factors at fire-grid cell centres.
+
+    For the conformal projections WRF supports, the parallel and meridional
+    scales are equal to within roundoff.  They are applied separately here,
+    mirroring geogrid's use of MAPFAC_MX and MAPFAC_MY.
+
+    A geographic (lat-lon) fire grid is unchanged because its spacing is in
+    degrees rather than projected metres and these metric terms do not apply.
+    If *apply_mask* is supplied, projection work is limited to its bounding
+    box; values outside the mask are subsequently zeroed by ``compute_slope``.
+    """
     if fire_grid.crs.is_geographic:
         return
 
@@ -45,6 +68,8 @@ def _apply_map_scale(
         column_start, column_stop = valid_columns.min(), valid_columns.max() + 1
 
     transform = fire_grid.transform
+    # from_origin() yields an axis-aligned transform, so cell centres separate
+    # into independent 1-D x and y sequences.
     columns = np.arange(column_start, column_stop)
     xs = transform.c + (columns + 0.5) * transform.a
     geographic_crs = CRS.from_proj4(
@@ -57,6 +82,7 @@ def _apply_map_scale(
 
     # Fire arrays use south-to-north row order. Raster transforms use the
     # opposite ordering, so select projected y coordinates from north to south.
+    # Process rows in chunks to avoid full-domain lon/lat/map-factor arrays.
     chunk_rows = 256
     for start in range(row_start, row_stop, chunk_rows):
         stop = min(start + chunk_rows, row_stop)
@@ -95,7 +121,21 @@ def compute_slope(
     fire_grid: FireGrid,
     valid_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return dimensionless x and y terrain gradients derived from ZSF."""
+    """Return (dzdxf, dzdyf) as float32 arrays shaped like *zsf*.
+
+    Args:
+        zsf: Terrain height on the fire grid, shape (ny_fire, nx_fire),
+             row 0 = southernmost (WRF/WPS netCDF order).
+        fire_grid: The FireGrid the terrain was reprojected onto; supplies the
+                   cell spacing and projection used for the map factor.
+        valid_mask: Optional high-resolution terrain coverage. Gradients are
+                    zero where their finite-difference stencil crosses its
+                    boundary.
+
+    Because row 0 is the southernmost row, axis 0 increases northward and
+    axis 1 increases eastward, so both gradients are positive uphill toward
+    increasing x/y, the same sign convention WRF-Fire expects.
+    """
     zsf_values = np.asarray(zsf, dtype=np.float32)
     expected_shape = (fire_grid.ny_fire, fire_grid.nx_fire)
     if zsf_values.shape != expected_shape:

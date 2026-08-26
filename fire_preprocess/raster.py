@@ -1,4 +1,14 @@
-"""Read and reproject GeoTIFF files onto the WRF fire subgrid."""
+"""Read and reproject GeoTIFF files onto the WRF fire subgrid.
+
+Two public entry points:
+  reproject_fuel(src_path, fire_grid)  →  float32 array (NFUEL_CAT)
+  reproject_dem (src_path, fire_grid)  →  float32 array (ZSF)
+
+Both can optionally return a Boolean source-coverage mask with the field.
+Both map onto the same fire grid (south_north_subgrid × west_east_subgrid).
+rasterio.warp.reproject handles the CRS transformation from the source
+raster's native projection to the WRF map projection automatically.
+"""
 
 from __future__ import annotations
 
@@ -44,6 +54,8 @@ def reproject_to_grid(
     height, width = fire_grid.ny_fire, fire_grid.nx_fire
     dst_crs = RasterioCRS.from_user_input(fire_grid.crs.to_wkt())
 
+    # NaN ensures pixels rasterio does not write, including domain areas
+    # outside the source extent, are represented explicitly in the mask.
     dst_data = np.full((height, width), np.nan, dtype=np.float32)
 
     with rasterio.open(src_path) as src:
