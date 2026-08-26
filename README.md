@@ -1,9 +1,9 @@
 # fire_preprocess
 
-A standalone Python tool that adds fire-specific input fields (`NFUEL_CAT` and `ZSF`) directly to
-WPS output files (`geo_em` or `met_em`) for use with the Community Fire Behavior Model
-(https://github.com/NCAR/fire_behavior), bypassing the traditional workflow that requires
-converting data to WPS geogrid binary format and editing `GEOGRID.TBL`.
+A standalone Python tool that adds fire-specific input fields (`NFUEL_CAT`, `ZSF`, `DZDXF`,
+`DZDYF`) directly to WPS output files (`geo_em` or `met_em`) for use with the Community Fire
+Behavior Model (https://github.com/NCAR/fire_behavior), bypassing the traditional workflow
+that requires converting data to WPS geogrid binary format and editing `GEOGRID.TBL`.
 
 ---
 
@@ -129,6 +129,25 @@ source,target
 python fire_preprocess.py --fuel-table my_remap.csv ...
 ```
 
+### Terrain gradients
+
+`DZDXF` and `DZDYF` are always written alongside `ZSF`.
+
+The stencil matches geogrid's `calc_dfdx`/`calc_dfdy` (WPS
+`geogrid/src/process_tile_module.f90`): a centred difference over two fire cells in the
+interior, one-sided at the domain edges. The map scale factor is applied, so the gradients
+remain correct on domains large enough for it to matter.
+Be aware that the sense of the correction is the **opposite** of geogrid's: WRF measures
+grid spacing in projection space and takes the true distance between grid points to be
+`dx/MAPFAC` — `dyn_em/module_diffusion_em.F` forms its physical mixing length as
+`sqrt(dx/msftx * dy/msfty)` — so a physical gradient must *multiply* by the map factor,
+whereas `calc_dfdx` divides by it. The factor is evaluated at fire-grid cell centres with
+`pyproj`, which reproduces WPS's own analytic formula to 6×10⁻¹².
+
+Note that geogrid applies `smooth_option = smth-desmth_special, smooth_passes = 1` to `ZSF`
+before differentiating it. This tool does not smooth, so in steep terrain the gradients are
+somewhat noisier than a geogrid-produced file would be.
+
 ---
 
 ## Background
@@ -144,6 +163,6 @@ The standard CFBM workflow requires:
 
 `fire_preprocess` replaces steps 2–4 entirely. It reads GeoTIFF directly,
 reprojects to the WRF fire subgrid using the projection parameters and
-`subgrid_ratio_x/y` values from `namelist.wps`, and writes `NFUEL_CAT` and
-`ZSF` into the existing WPS netCDF files. The rest of the workflow
+`subgrid_ratio_x/y` values from `namelist.wps`, and writes the fire fields
+into the existing WPS netCDF files. The rest of the workflow
 (`real.exe` → WRF) is unchanged.
