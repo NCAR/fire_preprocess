@@ -36,6 +36,7 @@ def reproject_to_grid(
     src_nodata: float = None,
     dst_fill: float = None,
     field_name: str = "field",
+    strict: bool = False,
 ) -> np.ndarray:
     """Core reprojection routine.
 
@@ -50,6 +51,11 @@ def reproject_to_grid(
     source's nodata value, which would leak it through whenever a caller
     wants a fill of 0. Substituting *dst_fill* ourselves afterwards avoids
     that pitfall for any fill value, including 0.
+
+    With *strict*, raises ValueError if any fire-grid cell lies outside the
+    source raster's extent. Cells inside it that hold nodata (e.g. LANDFIRE
+    offshore) are not counted: they are handled by *dst_fill* or the fuel
+    table, as without *strict*.
 
     Returns a 2-D float32 array in WRF row order (south_north, west_east):
     row 0 is the *southernmost* row, matching WRF/WPS netCDF convention.
@@ -73,6 +79,23 @@ def reproject_to_grid(
             dst_nodata=np.nan,
             resampling=resampling,
         )
+        if strict:
+            # The raster's footprint on the fire grid: a constant field, so
+            # only cells outside the extent come back empty.
+            footprint = np.full((height, width), np.nan, dtype=np.float32)
+            reproject(
+                source=np.ones(src_data.shape, dtype=np.float32),
+                destination=footprint,
+                src_transform=src.transform, src_crs=src.crs, src_nodata=None,
+                dst_transform=fire_grid.transform, dst_crs=dst_crs,
+                dst_nodata=np.nan, resampling=Resampling.nearest,
+            )
+            outside = int(np.isnan(footprint).sum())
+            if outside:
+                raise ValueError(
+                    f"{field_name}: {outside} of {footprint.size} fire-grid cells "
+                    f"({outside / footprint.size:.1%}) are outside {src_path}; "
+                    f"the raster must cover the whole fire domain")
 
     # rasterio returns row 0 = north; WRF netCDF expects row 0 = south.
     dst_data = np.flipud(dst_data)
@@ -85,7 +108,8 @@ def reproject_to_grid(
     return dst_data
 
 
-def reproject_fuel(src_path: str, fire_grid: FireGrid, band: int = 1) -> np.ndarray:
+def reproject_fuel(src_path: str, fire_grid: FireGrid, band: int = 1,
+                   strict: bool = False) -> np.ndarray:
     """Reproject a fuel-category GeoTIFF to the fire grid.
 
     Uses nearest-neighbour resampling to preserve integer category values.
@@ -98,11 +122,12 @@ def reproject_fuel(src_path: str, fire_grid: FireGrid, band: int = 1) -> np.ndar
         resampling=Resampling.nearest,
         band=band,
         field_name="NFUEL_CAT",
+        strict=strict,
     )
 
 
 def reproject_dem(src_path: str, fire_grid: FireGrid, band: int = 1,
-                   fill_value: float = 0.0) -> np.ndarray:
+                   fill_value: float = 0.0, strict: bool = False) -> np.ndarray:
     """Reproject a terrain DEM GeoTIFF to the fire grid.
 
     Uses bilinear resampling, matching the WPS geogrid four_pt interpolation
@@ -116,4 +141,5 @@ def reproject_dem(src_path: str, fire_grid: FireGrid, band: int = 1,
         band=band,
         dst_fill=fill_value,
         field_name="ZSF",
+        strict=strict,
     )

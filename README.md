@@ -33,8 +33,9 @@ automatically** for the exact WRF domain; supplying local GeoTIFF files with
 
 ### Automatic download (default)
 
-If `--fuel` or `--zsf` is not given, the tool computes the domain's bounding
-box (plus a 2 km buffer) and fetches the data itself:
+If `--fuel` or `--zsf` is not given, the tool computes the fire grid's
+bounding box (plus a 2 km buffer, rounded outward to 0.05° so nearby domains
+share downloads) and fetches the data itself:
 
 - **NFUEL_CAT** — requested from the [LANDFIRE Product Service
   (LFPS)](https://lfps.usgs.gov). The product matches `--fuel-table`
@@ -43,14 +44,24 @@ box (plus a 2 km buffer) and fetches the data itself:
   e.g. `LF2023`). *LFPS requires an email address* (`--email`), used by
   LANDFIRE only for usage reporting.
 - **ZSF** — from the USGS National Map (3DEP **1/3 arc-second**, ~10 m) by
-  default. The required 1°×1° tiles (~350 MB each) are downloaded and
-  merged/clipped to the domain. Alternatively `--zsf-source landfire` fetches
+  default. Only the part of each 1°×1° tile the domain needs is read
+  (straight from the USGS server), using the newest publication of each
+  tile, and merged/clipped into one GeoTIFF. A tile missing from 3DEP is an
+  error rather than a gap; cells inside a tile without data are open water
+  and are set to 0 m. Alternatively `--zsf-source landfire` fetches
   LANDFIRE's 30 m elevation through LFPS instead — a much smaller download at
   the cost of resolution.
 
-Everything lands in `--download-dir` (default `./downloads`) and is cached:
-re-running the tool for the same domain reuses the existing files, and DEM
-tiles are shared between overlapping domains.
+Everything lands in `--download-dir` (default `./downloads`), with a `.json`
+beside each file recording where it came from, and is cached: re-running the
+tool for the same area reuses the existing files. Both web services return
+transient errors now and then; requests are retried with back-off.
+
+With `--strict-coverage` the tool stops if any fire-grid cell lies outside
+the fuel or terrain raster, instead of warning when more than 5% of cells
+have no data. (Cells inside a raster that hold no data, such as LANDFIRE
+offshore, aren't counted: the fuel table maps them, and `--zsf-fill` sets
+ZSF there.)
 
 ```bash
 python fire_preprocess.py --wps-files geo_em.d03.nc --email you@example.org
@@ -122,6 +133,7 @@ All arguments can also be supplied via a YAML config file (see below).
 | `--landfire-version` | newest full-coverage | Pin the LANDFIRE version of downloaded fuel data (e.g. `LF2023`) |
 | `--download-dir` | `downloads` | Cache directory for downloaded rasters |
 | `--zsf-fill` | `0` | Value assigned to ZSF pixels with no source elevation data (outside the DEM's extent, or nodata voids within it) |
+| `--strict-coverage` | `false` | Stop if any fire-grid cell is outside the fuel or terrain raster |
 | `--namelist` | `namelist.wps` | Path to `namelist.wps`. Optional: if absent, `subgrid_ratio_x/y` are read from the WPS file's `sr_x`/`sr_y` global attributes (a namelist value overrides the file) |
 | `--domain` | `1` | Domain number, used to read the correct `subgrid_ratio_x/y` from the namelist |
 | `--fuel-table` | `fbfm13` | Fuel remapping table (see below) |

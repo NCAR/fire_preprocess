@@ -29,6 +29,7 @@ _DEFAULTS = {
     "zsf_source": "nationalmap",
     "download_dir": "downloads",
     "zsf_fill": 0.0,
+    "strict_coverage": False,
 }
 
 # LANDFIRE product to download when --fuel is omitted, keyed by fuel table.
@@ -173,6 +174,13 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Value assigned to ZSF pixels with no source elevation data "
             "(outside the DEM's extent, or nodata voids within it). Default: 0"
+        ),
+    )
+    parser.add_argument(
+        "--strict-coverage", action="store_true", default=None, dest="strict_coverage",
+        help=(
+            "Stop if any fire-grid cell is outside the fuel or terrain raster, "
+            "instead of warning when more than 5%% of cells have no data"
         ),
     )
     parser.add_argument(
@@ -434,7 +442,10 @@ def main(argv=None):
 
     # ── Reproject fuel categories ─────────────────────────────────────────────
     print(f"Reprojecting fuel data: {args.fuel}")
-    nfuel_raw = reproject_fuel(args.fuel, fire_grid)
+    try:
+        nfuel_raw = reproject_fuel(args.fuel, fire_grid, strict=args.strict_coverage)
+    except ValueError as exc:
+        sys.exit(f"Error: {exc}")
     nfuel = fuel_table.apply(nfuel_raw)
     print(
         f"  NFUEL_CAT shape {nfuel.shape}  "
@@ -443,7 +454,11 @@ def main(argv=None):
 
     # ── Reproject DEM ─────────────────────────────────────────────────────────
     print(f"Reprojecting terrain DEM: {args.zsf}")
-    zsf = reproject_dem(args.zsf, fire_grid, fill_value=args.zsf_fill)
+    try:
+        zsf = reproject_dem(args.zsf, fire_grid, fill_value=args.zsf_fill,
+                            strict=args.strict_coverage)
+    except ValueError as exc:
+        sys.exit(f"Error: {exc}")
     print(
         f"  ZSF shape {zsf.shape}  "
         f"range [{zsf.min():.1f}, {zsf.max():.1f}] m"
