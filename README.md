@@ -129,6 +129,7 @@ All arguments can also be supplied via a YAML config file (see below).
 | `--config` | `config.yaml` | YAML config file (loaded automatically if present) |
 | `--copy-from` | — | Copy the fields from this netCDF file instead of building them from GeoTIFFs (see below) |
 | `--vars` | all four | With `--copy-from`: comma-separated fields to copy |
+| `--perimeter` | — | Write `lfn_init` (observed-perimeter ignition) from this GeoJSON instead (see below) |
 
 ### Config file
 
@@ -202,6 +203,36 @@ python fire_preprocess.py --copy-from wrfndi_d02 --wps-files wrfinput_d02
   file's fuels and keep the target's terrain.
 - `--fuel`, `--zsf`, `--namelist`, `--domain` and `--fuel-table` don't apply.
   `copy_from` and `vars` can also be given in the config file.
+
+### Starting the fire from an observed perimeter (`--perimeter`)
+
+With `fire_is_real_perim = .true.`, CFBM starts the fire from a level-set
+field instead of a point or line ignition: at the ignition start time
+(`fire_ignition_start_time1`) it copies `lfn_init` into its level-set
+function, where negative is burnt and positive is not. `--perimeter` makes
+`lfn_init` from a GeoJSON perimeter and writes it into the fire domain's
+`geo_em`:
+
+```bash
+python fire_preprocess.py --perimeter perimeter.geojson \
+    --wps-files geo_em.d03.nc --namelist namelist.wps --domain 3
+```
+
+- The GeoJSON is a FeatureCollection, Feature, Polygon or MultiPolygon in
+  longitude/latitude (WGS84), as perimeter services such as NIFC's publish.
+  Holes are kept: an unburnt island stays unburnt.
+- Each fire-grid cell gets its signed distance to the perimeter in metres,
+  negative inside, accurate to about half a fire cell. The tool prints the
+  burnt area and the value range.
+- It stops if the perimeter extends beyond the fire domain (a cut-off
+  perimeter would start the wrong fire), or covers no cell or every cell.
+- `lfn_init` is written as CFBM reads it: a 2-D float on the fire subgrid
+  (`south_north_subgrid` x `west_east_subgrid`, no `Time` dimension).
+  Rerunning replaces it.
+- Needs `scipy` (in `environment.yaml`); the other modes don't.
+- **CFBM reads `lfn_init` only when it starts from `geo_em` (standalone).**
+  Coupled to WRF, it stops with "Not ready to initialize from fire perimeter
+  inside WRF" (`state/state_mod.F90`).
 
 ### Terrain gradients
 

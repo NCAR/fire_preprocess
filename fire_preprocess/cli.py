@@ -15,6 +15,7 @@ from .slope import compute_slope
 from .fuel_tables import get_fuel_table, list_fuel_tables
 from .wps_io import FIRE_VARS, check_existing_fire_vars, prompt_overwrite, write_fire_vars
 from .transfer import copy_fire_vars
+from . import perimeter
 
 _REQUIRED = ("wps_files",)
 
@@ -109,7 +110,11 @@ def build_parser() -> argparse.ArgumentParser:
             "  fire_preprocess --config config.yaml\n\n"
             "Copying fields that another file already has (e.g. after ndown.exe,\n"
             "which leaves them out of wrfinput_d02):\n"
-            "  fire_preprocess --copy-from wrfndi_d02 --wps-files wrfinput_d02\n"
+            "  fire_preprocess --copy-from wrfndi_d02 --wps-files wrfinput_d02\n\n"
+            "Starting the fire from an observed perimeter (lfn_init, for CFBM's\n"
+            "fire_is_real_perim):\n"
+            "  fire_preprocess --perimeter perimeter.geojson --wps-files geo_em.d03.nc \\\n"
+            "                  --namelist namelist.wps --domain 3\n"
         ),
     )
     parser.add_argument(
@@ -195,6 +200,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--perimeter", default=None, metavar="GEOJSON",
+        help=(
+            "Instead of fuel and terrain, write lfn_init -- the level-set field "
+            "CFBM starts the fire from when fire_is_real_perim is on -- from this "
+            "GeoJSON fire perimeter (longitude/latitude). Needs --wps-files, "
+            "--namelist and --domain, as for the GeoTIFF fields."
+        ),
+    )
+    parser.add_argument(
         "--vars", default=None, metavar="LIST",
         help=(
             "With --copy-from: comma-separated fields to copy. "
@@ -214,6 +228,49 @@ def _parse_vars(value) -> list:
         raise ValueError(f"--vars: unknown field(s) {', '.join(unknown)}; "
                          f"known: {', '.join(sorted(FIRE_VARS))}")
     return names
+
+
+def _perimeter_main(parser, args) -> None:
+    """--perimeter: write lfn_init from a GeoJSON perimeter."""
+    if not args.wps_files:
+        parser.error("--perimeter needs --wps-files (the fire domain's geo_em)")
+    if args.fuel or args.zsf or args.copy_from:
+        parser.error("--perimeter writes only lfn_init; run --fuel/--zsf or "
+                     "--copy-from separately")
+    try:
+        import scipy.ndimage  # noqa: F401  (only --perimeter needs it)
+    except ImportError:
+        sys.exit("Error: --perimeter needs scipy (conda install -c conda-forge scipy; "
+                 "it is in environment.yaml)")
+    files = sorted(glob.glob(args.wps_files))
+    if not files:
+        raise FileNotFoundError(f"No files matched the pattern: '{args.wps_files}'")
+
+    domain_index = args.domain - 1
+    sr_x, sr_y = get_fire_subgrid_ratios(args.namelist, domain_index=domain_index)
+    domain = read_domain_from_file(files[0], sr_x, sr_y,
+                                   namelist_params=get_domain_params(args.namelist,
+                                                                     domain_index=domain_index))
+    fire_grid = build_fire_grid(domain)
+    print(f"Fire grid: {fire_grid.nx_fire} x {fire_grid.ny_fire} "
+          f"({fire_grid.dx:.1f} m x {fire_grid.dy:.1f} m cells)")
+
+    try:
+        polys = perimeter.read_perimeter(args.perimeter)
+        mask = perimeter.burnt_mask(polys, fire_grid)
+        lfn = perimeter.signed_distance(mask, fire_grid.dx, fire_grid.dy)
+    except ValueError as exc:
+        sys.exit(f"Error: {args.perimeter}: {exc}")
+    area = mask.sum() * fire_grid.dx * fire_grid.dy
+    print(f"Perimeter {args.perimeter}: {len(polys)} polygon(s), {int(mask.sum())} burnt "
+          f"cells, {area / 1e4:.1f} ha ({area / 4046.86:.0f} acres)")
+    print(f"  lfn_init range [{lfn.min():.1f}, {lfn.max():.1f}] m (negative inside)")
+    for file_path in files:
+        perimeter.write_lfn_init(file_path, lfn, os.path.basename(args.perimeter))
+        print(f"  wrote lfn_init into {os.path.basename(file_path)}")
+    print(f"\nFinished: {len(files)} file(s) updated. CFBM starts the fire from it with "
+          f"fire_is_real_perim = .true., at fire_ignition_start_time1 (standalone CFBM; "
+          f"coupled WRF-CFBM can't read it yet).")
 
 
 def _copy_main(parser, args) -> None:
@@ -255,6 +312,9 @@ def main(argv=None):
 
     if args.copy_from:
         _copy_main(parser, args)
+        return
+    if args.perimeter:
+        _perimeter_main(parser, args)
         return
 
     # ── Validate required arguments ───────────────────────────────────────────
