@@ -156,7 +156,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--email", default=None, metavar="ADDRESS",
-        help="Email address, required by the LANDFIRE Product Service for downloads",
+        help=("Email address, required by the LANDFIRE Product Service for downloads. "
+              "Default: the LANDFIRE_EMAIL environment variable"),
     )
     parser.add_argument(
         "--landfire-version", default=None, metavar="LFxxxx", dest="landfire_version",
@@ -422,7 +423,7 @@ def main(argv=None):
             layer = resolve_landfire_layer(product, args.landfire_version)
             args.fuel = download_landfire(
                 layer, bbox, os.path.join(args.download_dir, f"{layer}_{tag}.tif"),
-                args.email,
+                args.email or os.environ.get("LANDFIRE_EMAIL"),
             )
 
         if args.zsf is None:
@@ -431,7 +432,7 @@ def main(argv=None):
                 layer = resolve_landfire_layer("Elev")
                 args.zsf = download_landfire(
                     layer, bbox, os.path.join(args.download_dir, f"{layer}_{tag}.tif"),
-                    args.email,
+                    args.email or os.environ.get("LANDFIRE_EMAIL"),
                 )
             else:
                 print("No terrain DEM given; downloading 1/3 arc-second DEM from the USGS National Map ...")

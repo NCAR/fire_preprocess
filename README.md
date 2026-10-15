@@ -129,7 +129,7 @@ All arguments can also be supplied via a YAML config file (see below).
 | `--fuel` | *download* | LANDFIRE fuel-category GeoTIFF (NFUEL_CAT source); downloaded automatically if omitted |
 | `--zsf` | *download* | High-resolution terrain DEM GeoTIFF (ZSF source); downloaded automatically if omitted |
 | `--zsf-source` | `nationalmap` | Source for automatic ZSF download: `nationalmap` (USGS 3DEP 1/3 arc-sec, ~10 m) or `landfire` (30 m, much smaller download) |
-| `--email` | — | Email address; required by the LANDFIRE Product Service when downloading |
+| `--email` | `$LANDFIRE_EMAIL` | Email address; required by the LANDFIRE Product Service when downloading |
 | `--landfire-version` | newest full-coverage | Pin the LANDFIRE version of downloaded fuel data (e.g. `LF2023`) |
 | `--download-dir` | `downloads` | Cache directory for downloaded rasters |
 | `--zsf-fill` | `0` | Value assigned to ZSF pixels with no source elevation data (outside the DEM's extent, or nodata voids within it) |
