@@ -204,8 +204,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Instead of fuel and terrain, write lfn_init -- the level-set field "
             "CFBM starts the fire from when fire_is_real_perim is on -- from this "
-            "GeoJSON fire perimeter (longitude/latitude). Needs --wps-files, "
-            "--namelist and --domain, as for the GeoTIFF fields."
+            "GeoJSON fire perimeter (longitude/latitude). Needs --wps-files; "
+            "--namelist / --domain as for the GeoTIFF fields."
         ),
     )
     parser.add_argument(
@@ -230,6 +230,59 @@ def _parse_vars(value) -> list:
     return names
 
 
+def _fire_grid(parser, args, files):
+    """The fire grid of the first WPS file. Its subgrid ratios come from the
+    namelist when it sets them (e.g. adding a fire grid to a domain run
+    without one), otherwise from the file's sr_x/sr_y global attributes."""
+    basenames = [os.path.basename(f) for f in files]
+    # ── Determine fire subgrid ratios and domain parameters ──────────────────
+    # An explicit namelist value wins (e.g. adding a fire grid to a geo_em file
+    # generated without one); otherwise the WPS file's sr_x/sr_y attributes are used.
+    domain_index = args.domain - 1  # namelist arrays are 0-indexed, domain numbers are 1-indexed
+    file_sr = read_subgrid_ratios_from_file(files[0])
+    nml_sr = (None, None)
+    nml_params = None
+    if os.path.isfile(args.namelist):
+        print(f"Reading namelist: {args.namelist}")
+        nml_sr = get_fire_subgrid_ratios(args.namelist, domain_index=domain_index)
+        nml_params = get_domain_params(args.namelist, domain_index=domain_index)
+
+    if nml_sr[0] is not None:
+        sr_x, sr_y = nml_sr
+        sr_source = args.namelist
+        if file_sr[0] is not None and file_sr != nml_sr:
+            print(
+                f"  Note: {basenames[0]} has sr_x/sr_y = {file_sr[0]}/{file_sr[1]}; "
+                f"using the namelist values {sr_x}/{sr_y} instead."
+            )
+    elif file_sr[0] is not None:
+        sr_x, sr_y = file_sr
+        sr_source = f"{basenames[0]} global attributes"
+    else:
+        parser.error(
+            f"Fire subgrid ratios not found: '{basenames[0]}' has no sr_x/sr_y global "
+            f"attributes and no namelist with subgrid_ratio_x/y was found at "
+            f"'{args.namelist}'. Supply --namelist."
+        )
+    print(f"  subgrid_ratio_x = {sr_x},  subgrid_ratio_y = {sr_y}  (from {sr_source})")
+
+    # ── Build WRF domain geometry ─────────────────────────────────────────────
+    print(f"Reading domain geometry from {basenames[0]} ...")
+    domain = read_domain_from_file(files[0], sr_x, sr_y, namelist_params=nml_params)
+    print(
+        f"  Atmospheric grid : {domain.nx} × {domain.ny} mass pts  "
+        f"dx={domain.dx:.1f} m  dy={domain.dy:.1f} m"
+    )
+
+    fire_grid = build_fire_grid(domain)
+    print(
+        f"  Fire grid        : {fire_grid.nx_fire} × {fire_grid.ny_fire}  "
+        f"({fire_grid.dx:.1f} m × {fire_grid.dy:.1f} m cells)"
+    )
+
+    return fire_grid, sr_x, sr_y
+
+
 def _perimeter_main(parser, args) -> None:
     """--perimeter: write lfn_init from a GeoJSON perimeter."""
     if not args.wps_files:
@@ -246,14 +299,7 @@ def _perimeter_main(parser, args) -> None:
     if not files:
         raise FileNotFoundError(f"No files matched the pattern: '{args.wps_files}'")
 
-    domain_index = args.domain - 1
-    sr_x, sr_y = get_fire_subgrid_ratios(args.namelist, domain_index=domain_index)
-    domain = read_domain_from_file(files[0], sr_x, sr_y,
-                                   namelist_params=get_domain_params(args.namelist,
-                                                                     domain_index=domain_index))
-    fire_grid = build_fire_grid(domain)
-    print(f"Fire grid: {fire_grid.nx_fire} x {fire_grid.ny_fire} "
-          f"({fire_grid.dx:.1f} m x {fire_grid.dy:.1f} m cells)")
+    fire_grid, sr_x, sr_y = _fire_grid(parser, args, files)
 
     try:
         polys = perimeter.read_perimeter(args.perimeter)
@@ -335,50 +381,7 @@ def main(argv=None):
     basenames = [os.path.basename(f) for f in files]
     print(f"  Found {len(files)} file(s): {basenames}")
 
-    # ── Determine fire subgrid ratios and domain parameters ──────────────────
-    # An explicit namelist value wins (e.g. adding a fire grid to a geo_em file
-    # generated without one); otherwise the WPS file's sr_x/sr_y attributes are used.
-    domain_index = args.domain - 1  # namelist arrays are 0-indexed, domain numbers are 1-indexed
-    file_sr = read_subgrid_ratios_from_file(files[0])
-    nml_sr = (None, None)
-    nml_params = None
-    if os.path.isfile(args.namelist):
-        print(f"Reading namelist: {args.namelist}")
-        nml_sr = get_fire_subgrid_ratios(args.namelist, domain_index=domain_index)
-        nml_params = get_domain_params(args.namelist, domain_index=domain_index)
-
-    if nml_sr[0] is not None:
-        sr_x, sr_y = nml_sr
-        sr_source = args.namelist
-        if file_sr[0] is not None and file_sr != nml_sr:
-            print(
-                f"  Note: {basenames[0]} has sr_x/sr_y = {file_sr[0]}/{file_sr[1]}; "
-                f"using the namelist values {sr_x}/{sr_y} instead."
-            )
-    elif file_sr[0] is not None:
-        sr_x, sr_y = file_sr
-        sr_source = f"{basenames[0]} global attributes"
-    else:
-        parser.error(
-            f"Fire subgrid ratios not found: '{basenames[0]}' has no sr_x/sr_y global "
-            f"attributes and no namelist with subgrid_ratio_x/y was found at "
-            f"'{args.namelist}'. Supply --namelist."
-        )
-    print(f"  subgrid_ratio_x = {sr_x},  subgrid_ratio_y = {sr_y}  (from {sr_source})")
-
-    # ── Build WRF domain geometry ─────────────────────────────────────────────
-    print(f"Reading domain geometry from {basenames[0]} ...")
-    domain = read_domain_from_file(files[0], sr_x, sr_y, namelist_params=nml_params)
-    print(
-        f"  Atmospheric grid : {domain.nx} × {domain.ny} mass pts  "
-        f"dx={domain.dx:.1f} m  dy={domain.dy:.1f} m"
-    )
-
-    fire_grid = build_fire_grid(domain)
-    print(
-        f"  Fire grid        : {fire_grid.nx_fire} × {fire_grid.ny_fire}  "
-        f"({fire_grid.dx:.1f} m × {fire_grid.dy:.1f} m cells)"
-    )
+    fire_grid, sr_x, sr_y = _fire_grid(parser, args, files)
 
     # ── Load fuel table ───────────────────────────────────────────────────────
     fuel_table = get_fuel_table(args.fuel_table)
