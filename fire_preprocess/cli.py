@@ -13,7 +13,8 @@ from .fire_grid import build_fire_grid
 from .raster import reproject_fuel, reproject_dem
 from .slope import compute_slope
 from .fuel_tables import get_fuel_table, list_fuel_tables
-from .wps_io import check_existing_fire_vars, prompt_overwrite, write_fire_vars
+from .wps_io import FIRE_VARS, check_existing_fire_vars, prompt_overwrite, write_fire_vars
+from .transfer import copy_fire_vars
 
 _REQUIRED = ("wps_files",)
 
@@ -105,7 +106,10 @@ def build_parser() -> argparse.ArgumentParser:
             "  fire_preprocess --wps-files 'met_em.d01.*.nc' --fuel landfire.tif \\\n"
             "                  --zsf dem.tif --namelist namelist.wps\n\n"
             "Example (config file):\n"
-            "  fire_preprocess --config config.yaml\n"
+            "  fire_preprocess --config config.yaml\n\n"
+            "Copying fields that another file already has (e.g. after ndown.exe,\n"
+            "which leaves them out of wrfinput_d02):\n"
+            "  fire_preprocess --copy-from wrfndi_d02 --wps-files wrfinput_d02\n"
         ),
     )
     parser.add_argument(
@@ -181,7 +185,64 @@ def build_parser() -> argparse.ArgumentParser:
         "--overwrite", action="store_true", default=False,
         help="Overwrite existing fire variables without prompting",
     )
+    parser.add_argument(
+        "--copy-from", default=None, metavar="FILE", dest="copy_from",
+        help=(
+            "Instead of building the fields from GeoTIFFs, copy them from this "
+            "WPS/WRF netCDF file (geo_em, met_em, wrfinput, wrfndi) into "
+            "--wps-files, which must be on the same grid. Replaces existing "
+            "values without prompting."
+        ),
+    )
+    parser.add_argument(
+        "--vars", default=None, metavar="LIST",
+        help=(
+            "With --copy-from: comma-separated fields to copy. "
+            f"Default: {','.join(sorted(FIRE_VARS))}"
+        ),
+    )
     return parser
+
+
+def _parse_vars(value) -> list:
+    if value is None:
+        return sorted(FIRE_VARS)
+    names = value if isinstance(value, list) else [v.strip() for v in str(value).split(",")]
+    names = [n for n in names if n]
+    unknown = sorted(set(names) - FIRE_VARS)
+    if unknown:
+        raise ValueError(f"--vars: unknown field(s) {', '.join(unknown)}; "
+                         f"known: {', '.join(sorted(FIRE_VARS))}")
+    return names
+
+
+def _copy_main(parser, args) -> None:
+    """--copy-from: copy existing fire fields into the target file(s)."""
+    if not args.wps_files:
+        parser.error("--copy-from needs --wps-files (the file(s) to copy into)")
+    if args.fuel or args.zsf:
+        parser.error("--copy-from copies fields from a file; it can't be combined "
+                     "with --fuel / --zsf")
+    if not os.path.isfile(args.copy_from):
+        raise FileNotFoundError(f"--copy-from file not found: {args.copy_from}")
+    try:
+        names = _parse_vars(args.vars)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    files = sorted(glob.glob(args.wps_files))
+    if not files:
+        raise FileNotFoundError(f"No files matched the pattern: '{args.wps_files}'")
+    print(f"Copying {', '.join(names)} from {args.copy_from}")
+    for file_path in files:
+        try:
+            ranges = copy_fire_vars(args.copy_from, file_path, names)
+        except ValueError as exc:
+            sys.exit(f"Error: cannot copy into {os.path.basename(file_path)}: {exc}")
+        print(f"  {os.path.basename(file_path)}:")
+        for name, (lo, hi) in ranges.items():
+            print(f"    {name:9s} range [{lo:.4g}, {hi:.4g}]")
+    print(f"\nFinished: {len(files)} file(s) updated.")
 
 
 def main(argv=None):
@@ -191,6 +252,10 @@ def main(argv=None):
     # ── Load config and merge ─────────────────────────────────────────────────
     cfg = load_config(args.config) if args.config and os.path.isfile(args.config) else {}
     args = _merge(args, cfg)
+
+    if args.copy_from:
+        _copy_main(parser, args)
+        return
 
     # ── Validate required arguments ───────────────────────────────────────────
     missing = [f"--{d.replace('_', '-')}" for d in _REQUIRED if not getattr(args, d, None)]

@@ -127,6 +127,8 @@ All arguments can also be supplied via a YAML config file (see below).
 | `--fuel-table` | `fbfm13` | Fuel remapping table (see below) |
 | `--overwrite` | `false` | Overwrite existing fire fields without prompting |
 | `--config` | `config.yaml` | YAML config file (loaded automatically if present) |
+| `--copy-from` | — | Copy the fields from this netCDF file instead of building them from GeoTIFFs (see below) |
+| `--vars` | all four | With `--copy-from`: comma-separated fields to copy |
 
 ### Config file
 
@@ -173,6 +175,33 @@ source,target
 ```bash
 python fire_preprocess.py --fuel-table my_remap.csv ...
 ```
+
+### Copying fields from another file (`--copy-from`)
+
+Some files describe a fire grid but come without its fields. The main case
+is WRF's `ndown.exe`: the `wrfinput_d02` it writes leaves out `NFUEL_CAT`,
+`ZSF`, `DZDXF` and `DZDYF`, though its fine-grid template (`wrfndi_d02`) has
+them, so a fire run started from it has no fuel. `--copy-from` copies the
+fields from one netCDF file into another as they are, with no reprojection:
+
+```bash
+python fire_preprocess.py --copy-from wrfndi_d02 --wps-files wrfinput_d02
+```
+
+- Source and target can be any WPS or WRF netCDF file (`geo_em`, `met_em`,
+  `wrfinput`, `wrfndi`, ...). `--wps-files` may be a glob.
+- They must be on the same grid. The tool checks the fire-subgrid size,
+  `DX`/`DY` and the atmospheric-grid latitudes and longitudes, and stops
+  without writing anything if they differ.
+- A field the target already has keeps the target's own attributes (so a
+  WRF file keeps WRF's metadata); only its values are replaced. A field it
+  lacks is created with the source's attributes.
+- Existing values are replaced without prompting: `--copy-from` is itself
+  the request.
+- `--vars` limits the copy, e.g. `--vars NFUEL_CAT` to swap in another
+  file's fuels and keep the target's terrain.
+- `--fuel`, `--zsf`, `--namelist`, `--domain` and `--fuel-table` don't apply.
+  `copy_from` and `vars` can also be given in the config file.
 
 ### Terrain gradients
 
