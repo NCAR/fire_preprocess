@@ -58,10 +58,10 @@ tool for the same area reuses the existing files. Both web services return
 transient errors now and then; requests are retried with back-off.
 
 With `--strict-coverage` the tool stops if any fire-grid cell lies outside
-the fuel or terrain raster, instead of warning when more than 5% of cells
-have no data. (Cells inside a raster that hold no data, such as LANDFIRE
-offshore, aren't counted: the fuel table maps them, and `--zsf-fill` sets
-ZSF there.)
+the fuel or terrain raster, instead of filling those cells as described in
+[Clipped source rasters](#clipped-source-rasters). (Cells inside a raster
+that hold no data, such as LANDFIRE offshore, aren't counted: they are
+filled the same way.)
 
 ```bash
 python fire_preprocess.py --wps-files geo_em.d03.nc --email you@example.org
@@ -132,8 +132,7 @@ All arguments can also be supplied via a YAML config file (see below).
 | `--email` | `$LANDFIRE_EMAIL` | Email address; required by the LANDFIRE Product Service when downloading |
 | `--landfire-version` | newest full-coverage | Pin the LANDFIRE version of downloaded fuel data (e.g. `LF2023`) |
 | `--download-dir` | `downloads` | Cache directory for downloaded rasters |
-| `--zsf-fill` | `0` | Value assigned to ZSF pixels with no source elevation data (outside the DEM's extent, or nodata voids within it) |
-| `--strict-coverage` | `false` | Stop if any fire-grid cell is outside the fuel or terrain raster |
+| `--strict-coverage` | `false` | Stop if any fire-grid cell is outside the fuel or terrain raster, instead of filling it from `HGT_M` |
 | `--namelist` | `namelist.wps` | Path to `namelist.wps`. Optional: if absent, `subgrid_ratio_x/y` are read from the WPS file's `sr_x`/`sr_y` global attributes (a namelist value overrides the file) |
 | `--domain` | `1` | Domain number, used to read the correct `subgrid_ratio_x/y` from the namelist |
 | `--fuel-table` | `fbfm13` | Fuel remapping table (see below) |
@@ -158,7 +157,6 @@ overwrite:  false
 zsf_source: nationalmap
 email:      you@example.org       # required for LANDFIRE downloads
 download_dir: downloads
-zsf_fill:   0                     # value for missing elevation pixels
 ```
 
 Run with a config file:
@@ -283,3 +281,18 @@ reprojects to the WRF fire subgrid using the projection parameters and
 `subgrid_ratio_x/y` values from `namelist.wps`, and writes the fire fields
 into the existing WPS netCDF files. The rest of the workflow
 (`real.exe` → WRF) is unchanged.
+
+### Clipped source rasters
+
+The fuel and high-resolution DEM GeoTIFFs may cover only the intended fire
+area. Outside their joint valid coverage, `NFUEL_CAT` is set to the selected
+fuel table's no-fuel category. `ZSF` remains finite over the full fire array by
+bilinearly interpolating the atmospheric `HGT_M` field to the fire grid, then
+overlaying the high-resolution DEM where both rasters are valid.
+
+`DZDXF` and `DZDYF` are calculated from the merged `ZSF` using centered
+differences in the interior, one-sided differences at array edges, and WRF
+projection map factors. Both gradients are set to zero wherever their
+two-dimensional finite-difference stencil crosses the clipped-data boundary.
+This prevents a terrain discontinuity at the boundary from entering the fire
+spread calculation.

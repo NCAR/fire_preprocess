@@ -3,4 +3,5 @@
 *.grib2
 FILE:*
 __pycache__/
+*.pyc
 downloads/
