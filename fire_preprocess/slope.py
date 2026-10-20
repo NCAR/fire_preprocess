@@ -22,9 +22,6 @@ sqrt(dx/msftx * dy/msfty)), so a physical gradient must *multiply* by the map
 factor.  geogrid's calc_dfdx divides by it instead.  Map factors are evaluated
 in row chunks to avoid allocating full-domain coordinate and factor arrays.
 """
-
-from __future__ import annotations
-
 import numpy as np
 from pyproj import CRS, Proj, Transformer
 

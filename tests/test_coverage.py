@@ -1,7 +1,4 @@
 """Test atmospheric-terrain interpolation and clipped raster coverage."""
-
-from __future__ import annotations
-
 import unittest
 
 import numpy as np

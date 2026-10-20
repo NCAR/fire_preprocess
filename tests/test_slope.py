@@ -1,7 +1,4 @@
 """Test fire-grid terrain gradients and high-resolution coverage masking."""
-
-from __future__ import annotations
-
 import unittest
 
 import numpy as np
