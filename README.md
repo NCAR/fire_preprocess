@@ -233,7 +233,7 @@ python fire_preprocess.py --perimeter perimeter.geojson \
 - The GeoJSON is a FeatureCollection, Feature, Polygon or MultiPolygon in
   longitude/latitude (WGS84), as perimeter services such as NIFC's publish.
   Holes are kept: an unburnt island stays unburnt.
-- Each fire-grid cell gets its signed distance to the perimeter in metres,
+- Each fire-grid cell gets its signed distance to the perimeter in meters,
   negative inside, accurate to about half a fire cell. The tool prints the
   burnt area and the value range.
 - It stops if the perimeter extends beyond the fire domain (a cut-off

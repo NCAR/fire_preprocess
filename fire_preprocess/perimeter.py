@@ -9,8 +9,8 @@ Time dimension) on the fire grid.
 
 This module turns a GeoJSON perimeter into that field: the polygon is
 projected onto the fire grid and burned in, and each cell gets its signed
-distance to the perimeter, in metres (negative inside). Distances are
-measured between fire-cell centres, so they are good to about half a fire
+distance to the perimeter, in meters (negative inside). Distances are
+measured between fire-cell centers, so they are good to about half a fire
 cell -- the grid's own resolution.
 """
 import json
@@ -61,7 +61,7 @@ def _project(geom: dict, to_grid) -> dict:
 
 
 def burnt_mask(polys: list, fire_grid: FireGrid) -> np.ndarray:
-    """True where a fire-cell centre is inside the perimeter. Row 0 is the
+    """True where a fire-cell center is inside the perimeter. Row 0 is the
     southernmost row, as in WPS/WRF files. Raises ValueError if the
     perimeter is not entirely inside the fire grid."""
     to_grid = Transformer.from_crs("EPSG:4326", fire_grid.crs, always_xy=True)
@@ -90,12 +90,12 @@ def burnt_mask(polys: list, fire_grid: FireGrid) -> np.ndarray:
 
 
 def signed_distance(mask: np.ndarray, dx: float, dy: float) -> np.ndarray:
-    """Distance to the perimeter in metres, negative inside (burnt). The
-    boundary lies between a burnt and an unburnt cell centre, so half a
-    cell is taken off each side's centre-to-centre distance."""
+    """Distance to the perimeter in meters, negative inside (burnt). The
+    boundary lies between a burnt and an unburnt cell center, so half a
+    cell is taken off each side's center-to-center distance."""
     from scipy.ndimage import distance_transform_edt
     if not mask.any():
-        raise ValueError("the perimeter covers no fire-grid cell centre")
+        raise ValueError("the perimeter covers no fire-grid cell center")
     if mask.all():
         raise ValueError("the perimeter covers the whole fire domain")
     half = 0.5 * min(dx, dy)
