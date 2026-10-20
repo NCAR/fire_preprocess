@@ -57,11 +57,14 @@ beside each file recording where it came from, and is cached: re-running the
 tool for the same area reuses the existing files. Both web services return
 transient errors now and then; requests are retried with back-off.
 
-With `--strict-coverage` the tool stops if any fire-grid cell lies outside
-the fuel or terrain raster, instead of filling those cells as described in
-[Clipped source rasters](#clipped-source-rasters). (Cells inside a raster
-that hold no data, such as LANDFIRE offshore, aren't counted: they are
-filled the same way.)
+By default a raster that covers only part of the fire grid is fine: cells
+outside it are filled as described in [Clipped source
+rasters](#clipped-source-rasters). `--strict-coverage` requires both rasters
+to cover the whole fire grid instead, and stops without writing anything if
+a cell lies outside either one's extent; use it when a shortfall can only
+mean the wrong file or area, as with automatic downloads. Nodata cells
+*inside* a raster, such as ocean, are always filled, so coastal domains
+aren't rejected.
 
 ```bash
 python fire_preprocess.py --wps-files geo_em.d03.nc --email you@example.org
@@ -125,14 +128,14 @@ All arguments can also be supplied via a YAML config file (see below).
 
 | Argument | Default | Description |
 |---|---|---|
-| `--wps-files` | — | WPS output file (`geo_em`/`met_em`) or glob pattern (e.g. `'met_em.d02.*.nc'`) |
+| `--wps-files` | — | WPS output file (`geo_em`/`met_em`) or glob pattern (e.g. `'met_em.d02.*.nc'`); with `--copy-from`, any WPS or WRF netCDF file such as `wrfinput_d02` |
 | `--fuel` | *download* | LANDFIRE fuel-category GeoTIFF (NFUEL_CAT source); downloaded automatically if omitted |
 | `--zsf` | *download* | High-resolution terrain DEM GeoTIFF (ZSF source); downloaded automatically if omitted |
 | `--zsf-source` | `nationalmap` | Source for automatic ZSF download: `nationalmap` (USGS 3DEP 1/3 arc-sec, ~10 m) or `landfire` (30 m, much smaller download) |
 | `--email` | `$LANDFIRE_EMAIL` | Email address; required by the LANDFIRE Product Service when downloading |
 | `--landfire-version` | newest full-coverage | Pin the LANDFIRE version of downloaded fuel data (e.g. `LF2023`) |
 | `--download-dir` | `downloads` | Cache directory for downloaded rasters |
-| `--strict-coverage` | `false` | Stop if any fire-grid cell is outside the fuel or terrain raster, instead of filling it from `HGT_M` |
+| `--strict-coverage` | `false` | Require the rasters to cover the whole fire grid; stop instead of filling cells outside them. Nodata inside a raster (e.g. ocean) is still filled |
 | `--namelist` | `namelist.wps` | Path to `namelist.wps`. Optional: if absent, `subgrid_ratio_x/y` are read from the WPS file's `sr_x`/`sr_y` global attributes (a namelist value overrides the file) |
 | `--domain` | `1` | Domain number, used to read the correct `subgrid_ratio_x/y` from the namelist |
 | `--fuel-table` | `fbfm13` | Fuel remapping table (see below) |
@@ -244,19 +247,35 @@ python fire_preprocess.py --perimeter perimeter.geojson \
   Coupled to WRF, it stops with "Not ready to initialize from fire perimeter
   inside WRF" (`state/state_mod.F90`).
 
+### Clipped source rasters
+
+The fuel and high-resolution DEM GeoTIFFs may cover only the intended fire
+area. Outside their joint valid coverage, `NFUEL_CAT` is set to the selected
+fuel table's no-fuel category. `ZSF` remains finite over the full fire array by
+bilinearly interpolating the atmospheric `HGT_M` field to the fire grid, then
+overlaying the high-resolution DEM where both rasters are valid.
+
+`DZDXF` and `DZDYF` are calculated from the merged `ZSF` using centered
+differences in the interior, one-sided differences at array edges, and WRF
+projection map factors. Both gradients are set to zero wherever their
+two-dimensional finite-difference stencil crosses the clipped-data boundary.
+This prevents a terrain discontinuity at the boundary from entering the fire
+spread calculation.
+
 ### Terrain gradients
 
 `DZDXF` and `DZDYF` are always written alongside `ZSF`.
 
 The stencil matches geogrid's `calc_dfdx`/`calc_dfdy` (WPS
-`geogrid/src/process_tile_module.f90`): a centred difference over two fire cells in the
-interior, one-sided at the domain edges. The map scale factor is applied, so the gradients
+`geogrid/src/process_tile_module.f90`): a centered difference over two fire cells in the
+interior, one-sided at the domain edges, and zero where a stencil crosses the edge of
+clipped source data (see above). The map scale factor is applied, so the gradients
 remain correct on domains large enough for it to matter.
 Be aware that the sense of the correction is the **opposite** of geogrid's: WRF measures
 grid spacing in projection space and takes the true distance between grid points to be
 `dx/MAPFAC` — `dyn_em/module_diffusion_em.F` forms its physical mixing length as
 `sqrt(dx/msftx * dy/msfty)` — so a physical gradient must *multiply* by the map factor,
-whereas `calc_dfdx` divides by it. The factor is evaluated at fire-grid cell centres with
+whereas `calc_dfdx` divides by it. The factor is evaluated at fire-grid cell centers with
 `pyproj`, which reproduces WPS's own analytic formula to 6×10⁻¹².
 
 Note that geogrid applies `smooth_option = smth-desmth_special, smooth_passes = 1` to `ZSF`
@@ -278,21 +297,6 @@ The standard CFBM workflow requires:
 
 `fire_preprocess` replaces steps 2–4 entirely. It reads GeoTIFF directly,
 reprojects to the WRF fire subgrid using the projection parameters and
-`subgrid_ratio_x/y` values from `namelist.wps`, and writes the fire fields
+subgrid ratios from the WPS file itself (or `namelist.wps`), and writes the fire fields
 into the existing WPS netCDF files. The rest of the workflow
 (`real.exe` → WRF) is unchanged.
-
-### Clipped source rasters
-
-The fuel and high-resolution DEM GeoTIFFs may cover only the intended fire
-area. Outside their joint valid coverage, `NFUEL_CAT` is set to the selected
-fuel table's no-fuel category. `ZSF` remains finite over the full fire array by
-bilinearly interpolating the atmospheric `HGT_M` field to the fire grid, then
-overlaying the high-resolution DEM where both rasters are valid.
-
-`DZDXF` and `DZDYF` are calculated from the merged `ZSF` using centered
-differences in the interior, one-sided differences at array edges, and WRF
-projection map factors. Both gradients are set to zero wherever their
-two-dimensional finite-difference stencil crosses the clipped-data boundary.
-This prevents a terrain discontinuity at the boundary from entering the fire
-spread calculation.

@@ -98,9 +98,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fire_preprocess",
         description=(
-            "Add CFBM static fire fields (NFUEL_CAT, ZSF, DZDXF, DZDYF) directly\n"
-            "to WPS netCDF files,\n"
-            "bypassing GEOGRID.TBL editing and geogrid binary format conversion."
+            "Add CFBM static fire fields (NFUEL_CAT, ZSF, DZDXF, DZDYF) directly to\n"
+            "WPS netCDF files, bypassing GEOGRID.TBL editing and geogrid binary\n"
+            "format conversion."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -128,7 +128,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--wps-files", default=None, metavar="PATH", dest="wps_files",
-        help="Path to a WPS output file (geo_em/met_em) or a glob pattern (e.g. 'met_em.d01.*.nc')",
+        help=("Path to a WPS output file (geo_em/met_em) or a glob pattern (e.g. 'met_em.d01.*.nc'); "
+              "with --copy-from, any WPS or WRF netCDF file such as wrfinput_d02"),
     )
     parser.add_argument(
         "--zsf", default=None, metavar="GEOTIFF",
@@ -177,8 +178,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--strict-coverage", action="store_true", default=None, dest="strict_coverage",
         help=(
-            "Stop if any fire-grid cell is outside the fuel or terrain raster, "
-            "instead of giving those cells no fuel and the interpolated HGT_M"
+            "Require the fuel and terrain rasters to cover the whole fire grid: "
+            "stop if any fire-grid cell is outside either raster's extent, instead "
+            "of filling it (no fuel, interpolated HGT_M). Nodata cells inside a "
+            "raster, such as ocean, are always filled"
         ),
     )
     parser.add_argument(

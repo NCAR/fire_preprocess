@@ -29,7 +29,7 @@ def _warn_coverage(
     if frac > threshold:
         warnings.warn(
             f"{field_name}: {frac:.1%} of fire-grid pixels are outside the "
-            "source coverage; the workflow will use its configured background.",
+            "source coverage; they get no fuel and the interpolated HGT_M.",
             stacklevel=3,
         )
 
