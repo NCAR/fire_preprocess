@@ -9,9 +9,6 @@ Both map onto the same fire grid (south_north_subgrid × west_east_subgrid).
 rasterio.warp.reproject handles the CRS transformation from the source
 raster's native projection to the WRF map projection automatically.
 """
-
-from __future__ import annotations
-
 import warnings
 
 import numpy as np
