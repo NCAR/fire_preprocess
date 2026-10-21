@@ -1,8 +1,9 @@
 # Regression tests
 
-The test suite verifies the clipped-source coverage handling and terrain-gradient
-behavior added to `fire_preprocess`. The tests use small synthetic arrays and do
-not require LANDFIRE, DEM, WPS, or WRF input files.
+The test suite verifies fire-grid dimensions, clipped-source coverage handling,
+and terrain-gradient behavior in `fire_preprocess`. The tests use small synthetic
+arrays and in-memory NetCDF datasets. They do not require LANDFIRE, DEM, WPS, or
+WRF input files.
 
 ## Running the tests
 
@@ -24,12 +25,20 @@ Individual modules can be run with:
 ```bash
 python -m unittest -v tests.test_coverage
 python -m unittest -v tests.test_slope
+python -m unittest -v tests.test_fire_grid
 ```
 
 The tests should be run from the repository root so Python imports the local
 `fire_preprocess` package.
 
 ## Current coverage
+
+### `test_fire_grid.py`
+
+Checks ratio-one geogrids with mass-sized fire dimensions, refined grids with
+WPS padding, unequal refinement ratios, and files with missing subgrid
+dimensions. Tests verify the output shape, spacing, and grid placement, and
+reject existing dimensions incompatible with the requested refinement.
 
 ### `test_coverage.py`
 

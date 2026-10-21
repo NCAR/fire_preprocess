@@ -1,7 +1,9 @@
 """Compute fire subgrid dimensions and rasterio affine transform.
 
-WPS uses the atmospheric *staggered* point count (e_we / e_sn) — not the
-mass point count — to determine the fire subgrid size:
+Existing WPS fire-subgrid dimensions determine the output size. An
+unrefined grid can use the atmospheric mass-point count directly. When
+subgrid dimensions are absent, construct the padded grid from the
+atmospheric staggered point count (e_we / e_sn):
 
   nx_fire = e_we * sr_x = (nx_mass + 1) * sr_x
   ny_fire = e_sn * sr_y = (ny_mass + 1) * sr_y
@@ -28,18 +30,32 @@ class FireGrid:
     crs: object      # pyproj.CRS of the fire grid
 
 
-def build_fire_grid(domain: WRFDomain) -> FireGrid:
-    """Derive the FireGrid from a WRFDomain.
+def _fire_dimension(n_mass: int, ratio: int, existing: int | None,
+                    name: str) -> int:
+    """Retain a WPS extent only when it matches the requested refinement."""
+    padded = (n_mass + 1) * ratio
+    if existing is None:
+        return padded
+    # Ratio-one geogrids may omit the northern/eastern padding. Refined
+    # grids must still agree with the requested refinement and WPS extent.
+    if existing == padded or (ratio == 1 and existing == n_mass):
+        return existing
+    raise ValueError(
+        f"Dimension '{name}' has size {existing}, incompatible with "
+        f"{n_mass} atmospheric mass points and subgrid ratio {ratio}. "
+        "Check that the requested subgrid ratios match the WPS file."
+    )
 
-    Fire grid size follows WPS convention: (nx_mass + 1) * sr, which equals
-    e_we * sr_x and e_sn * sr_y.
-    """
+
+def build_fire_grid(domain: WRFDomain) -> FireGrid:
+    """Use existing WPS subgrid dimensions, or construct a padded fire grid."""
     dx_f = domain.dx / domain.sr_x
     dy_f = domain.dy / domain.sr_y
 
-    # +1 because WPS sizes the fire grid on the staggered atmospheric count
-    nx_fire = (domain.nx + 1) * domain.sr_x
-    ny_fire = (domain.ny + 1) * domain.sr_y
+    nx_fire = _fire_dimension(domain.nx, domain.sr_x, domain.nx_fire,
+                             "west_east_subgrid")
+    ny_fire = _fire_dimension(domain.ny, domain.sr_y, domain.ny_fire,
+                             "south_north_subgrid")
 
     x0 = domain.x_fire_sw  # west edge of SW fire cell (= SW staggered atm corner)
     y0 = domain.y_fire_sw  # south edge of SW fire cell
