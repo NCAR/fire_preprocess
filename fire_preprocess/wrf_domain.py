@@ -27,6 +27,8 @@ class WRFDomain:
     y_fire_sw: float  # y of SW fire-grid corner in WRF projection coords (m)
     sr_x: int         # fire subgrid refinement ratio, west-east
     sr_y: int         # fire subgrid refinement ratio, south-north
+    nx_fire: int | None = None  # existing west_east_subgrid dimension, if present
+    ny_fire: int | None = None  # existing south_north_subgrid dimension, if present
 
 
 def build_wrf_crs(map_proj, truelat1, truelat2, stand_lon):
@@ -127,6 +129,10 @@ def read_domain_from_file(file_path, sr_x, sr_y, namelist_params=None):
         stand_lon = float(attrs["STAND_LON"])
         dx = float(attrs["DX"])
         dy = float(attrs["DY"])
+        nx_fire = (len(ds.dimensions["west_east_subgrid"])
+                   if "west_east_subgrid" in ds.dimensions else None)
+        ny_fire = (len(ds.dimensions["south_north_subgrid"])
+                   if "south_north_subgrid" in ds.dimensions else None)
 
         crs = build_wrf_crs(map_proj, truelat1, truelat2, stand_lon)
 
@@ -153,4 +159,5 @@ def read_domain_from_file(file_path, sr_x, sr_y, namelist_params=None):
         stand_lon=stand_lon, crs=crs,
         x_fire_sw=x_fire_sw, y_fire_sw=y_fire_sw,
         sr_x=sr_x, sr_y=sr_y,
+        nx_fire=nx_fire, ny_fire=ny_fire,
     )
