@@ -13,14 +13,16 @@ from .coverage import (
     read_atmospheric_terrain,
 )
 from .namelist import get_fire_subgrid_ratios, get_domain_params
-from .wrf_domain import read_domain_from_file
+from .wrf_domain import read_domain_from_file, read_subgrid_ratios_from_file
 from .fire_grid import build_fire_grid
 from .raster import reproject_fuel, reproject_dem
 from .slope import compute_slope
 from .fuel_tables import get_fuel_table, list_fuel_tables
-from .wps_io import check_existing_fire_vars, prompt_overwrite, write_fire_vars
+from .wps_io import FIRE_VARS, check_existing_fire_vars, prompt_overwrite, write_fire_vars
+from .transfer import copy_fire_vars
+from . import perimeter
 
-_REQUIRED = ("wps_files", "zsf", "fuel", "namelist")
+_REQUIRED = ("wps_files",)
 
 # Defaults applied after CLI + config are merged, so neither source
 # can be mistaken for an explicit user value.
@@ -29,13 +31,23 @@ _DEFAULTS = {
     "domain": 1,
     "namelist": "namelist.wps",
     "overwrite": False,
+    "zsf_source": "nationalmap",
+    "download_dir": "downloads",
+    "strict_coverage": False,
+}
+
+# LANDFIRE product to download when --fuel is omitted, keyed by fuel table.
+_FUEL_TABLE_PRODUCT = {
+    "fbfm13": "FBFM13",
+    "fbfm40": "FBFM40",
+    "fbfm40_to_anderson13": "FBFM40",
 }
 
 
 def load_config(path: str) -> dict:
     """Load a YAML config file and return a dict keyed by argparse dest names.
 
-    Config keys are normalised to lowercase with hyphens replaced by
+    Config keys are normalized to lowercase with hyphens replaced by
     underscores, so 'ZSF', 'zsf', and 'z-s-f' all map to dest 'zsf'.
     """
     with open(path) as fh:
@@ -73,19 +85,22 @@ def _merge(args: argparse.Namespace, cfg: dict) -> argparse.Namespace:
 def build_parser() -> argparse.ArgumentParser:
     config_example = (
         "  wps_files:  'met_em.d01.*.nc'\n"
-        "  zsf:        /path/to/highres_dem.tif\n"
-        "  fuel:       /path/to/landfire.tif\n"
+        "  zsf:        /path/to/highres_dem.tif   # omit to download automatically\n"
+        "  fuel:       /path/to/landfire.tif      # omit to download automatically\n"
         "  namelist:   namelist.wps\n"
         "  fuel_table: fbfm13\n"
         "  domain:     1\n"
         "  overwrite:  false\n"
+        "  zsf_source: nationalmap\n"
+        "  email:      you@example.org           # required for LANDFIRE downloads\n"
+        "  download_dir: downloads\n"
     )
     parser = argparse.ArgumentParser(
         prog="fire_preprocess",
         description=(
-            "Add CFBM static fire fields (NFUEL_CAT, ZSF, DZDXF, DZDYF) directly\n"
-            "to WPS netCDF files,\n"
-            "bypassing GEOGRID.TBL editing and geogrid binary format conversion."
+            "Add CFBM static fire fields (NFUEL_CAT, ZSF, DZDXF, DZDYF) directly to\n"
+            "WPS netCDF files, bypassing GEOGRID.TBL editing and geogrid binary\n"
+            "format conversion."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -97,7 +112,14 @@ def build_parser() -> argparse.ArgumentParser:
             "  fire_preprocess --wps-files 'met_em.d01.*.nc' --fuel landfire.tif \\\n"
             "                  --zsf dem.tif --namelist namelist.wps\n\n"
             "Example (config file):\n"
-            "  fire_preprocess --config config.yaml\n"
+            "  fire_preprocess --config config.yaml\n\n"
+            "Copying fields that another file already has (e.g. after ndown.exe,\n"
+            "which leaves them out of wrfinput_d02):\n"
+            "  fire_preprocess --copy-from wrfndi_d02 --wps-files wrfinput_d02\n\n"
+            "Starting the fire from an observed perimeter (lfn_init, for CFBM's\n"
+            "fire_is_real_perim):\n"
+            "  fire_preprocess --perimeter perimeter.geojson --wps-files geo_em.d03.nc \\\n"
+            "                  --namelist namelist.wps --domain 3\n"
         ),
     )
     parser.add_argument(
@@ -106,19 +128,61 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--wps-files", default=None, metavar="PATH", dest="wps_files",
-        help="Path to a WPS output file (geo_em/met_em) or a glob pattern (e.g. 'met_em.d01.*.nc')",
+        help=("Path to a WPS output file (geo_em/met_em) or a glob pattern (e.g. 'met_em.d01.*.nc'); "
+              "with --copy-from, any WPS or WRF netCDF file such as wrfinput_d02"),
     )
     parser.add_argument(
         "--zsf", default=None, metavar="GEOTIFF",
-        help="High-resolution terrain DEM GeoTIFF (ZSF source; ≥1/3 arc-sec recommended)",
+        help=(
+            "High-resolution terrain DEM GeoTIFF (ZSF source; ≥1/3 arc-sec recommended). "
+            "If omitted, the DEM is downloaded automatically (see --zsf-source)."
+        ),
     )
     parser.add_argument(
         "--fuel", default=None, metavar="GEOTIFF",
-        help="LANDFIRE fuel-category GeoTIFF (NFUEL_CAT source)",
+        help=(
+            "LANDFIRE fuel-category GeoTIFF (NFUEL_CAT source). If omitted, the fuel "
+            "layer matching --fuel-table is downloaded automatically from LANDFIRE."
+        ),
     )
     parser.add_argument(
         "--namelist", default=None, metavar="FILE",
-        help="Path to namelist.wps (provides subgrid_ratio_x/y and projection parameters)",
+        help=(
+            "Path to namelist.wps. Optional: subgrid_ratio_x/y are read from the WPS "
+            "file's sr_x/sr_y global attributes when the namelist is absent."
+        ),
+    )
+    parser.add_argument(
+        "--zsf-source", default=None, choices=("nationalmap", "landfire"), dest="zsf_source",
+        help=(
+            "Source for automatic ZSF download: 'nationalmap' = USGS 3DEP 1/3 arc-sec "
+            "(~10 m, default), 'landfire' = LANDFIRE elevation (30 m, smaller download)"
+        ),
+    )
+    parser.add_argument(
+        "--email", default=None, metavar="ADDRESS",
+        help=("Email address, required by the LANDFIRE Product Service for downloads. "
+              "Default: the LANDFIRE_EMAIL environment variable"),
+    )
+    parser.add_argument(
+        "--landfire-version", default=None, metavar="LFxxxx", dest="landfire_version",
+        help=(
+            "Pin the LANDFIRE version for downloaded fuel data (e.g. LF2023). "
+            "Default: newest version with full geographic coverage"
+        ),
+    )
+    parser.add_argument(
+        "--download-dir", default=None, metavar="DIR", dest="download_dir",
+        help="Directory where downloaded rasters are cached. Default: ./downloads",
+    )
+    parser.add_argument(
+        "--strict-coverage", action="store_true", default=None, dest="strict_coverage",
+        help=(
+            "Require the fuel and terrain rasters to cover the whole fire grid: "
+            "stop if any fire-grid cell is outside either raster's extent, instead "
+            "of filling it (no fuel, interpolated HGT_M). Nodata cells inside a "
+            "raster, such as ocean, are always filled"
+        ),
     )
     parser.add_argument(
         "--fuel-table", default=None, metavar="NAME|PATH", dest="fuel_table",
@@ -135,39 +199,81 @@ def build_parser() -> argparse.ArgumentParser:
         "--overwrite", action="store_true", default=False,
         help="Overwrite existing fire variables without prompting",
     )
+    parser.add_argument(
+        "--copy-from", default=None, metavar="FILE", dest="copy_from",
+        help=(
+            "Instead of building the fields from GeoTIFFs, copy them from this "
+            "WPS/WRF netCDF file (geo_em, met_em, wrfinput, wrfndi) into "
+            "--wps-files, which must be on the same grid. Replaces existing "
+            "values without prompting."
+        ),
+    )
+    parser.add_argument(
+        "--perimeter", default=None, metavar="GEOJSON",
+        help=(
+            "Instead of fuel and terrain, write lfn_init -- the level-set field "
+            "CFBM starts the fire from when fire_is_real_perim is on -- from this "
+            "GeoJSON fire perimeter (longitude/latitude). Needs --wps-files; "
+            "--namelist / --domain as for the GeoTIFF fields."
+        ),
+    )
+    parser.add_argument(
+        "--vars", default=None, metavar="LIST",
+        help=(
+            "With --copy-from: comma-separated fields to copy. "
+            f"Default: {','.join(sorted(FIRE_VARS))}"
+        ),
+    )
     return parser
 
 
-def main(argv=None):
-    parser = build_parser()
-    args = parser.parse_args(argv)
+def _parse_vars(value) -> list:
+    if value is None:
+        return sorted(FIRE_VARS)
+    names = value if isinstance(value, list) else [v.strip() for v in str(value).split(",")]
+    names = [n for n in names if n]
+    unknown = sorted(set(names) - FIRE_VARS)
+    if unknown:
+        raise ValueError(f"--vars: unknown field(s) {', '.join(unknown)}; "
+                         f"known: {', '.join(sorted(FIRE_VARS))}")
+    return names
 
-    # ── Load config and merge ─────────────────────────────────────────────────
-    cfg = load_config(args.config) if args.config and os.path.isfile(args.config) else {}
-    args = _merge(args, cfg)
 
-    # ── Validate required arguments ───────────────────────────────────────────
-    missing = [f"--{d.replace('_', '-')}" for d in _REQUIRED if not getattr(args, d, None)]
-    if missing:
-        parser.error(
-            f"The following arguments are required: {', '.join(missing)}\n"
-            "Supply them on the command line or via --config."
-        )
-
-    # ── Find WPS files ─────────────────────────────────────────────────────
-    print(f"Searching for WPS file(s): {args.wps_files}")
-    files = sorted(glob.glob(args.wps_files))
-    if not files:
-        raise FileNotFoundError(f"No files matched the pattern: '{args.wps_files}'")
+def _fire_grid(parser, args, files):
+    """The fire grid of the first WPS file. Its subgrid ratios come from the
+    namelist when it sets them (e.g. adding a fire grid to a domain run
+    without one), otherwise from the file's sr_x/sr_y global attributes."""
     basenames = [os.path.basename(f) for f in files]
-    print(f"  Found {len(files)} file(s): {basenames}")
-
-    # ── Read namelist ─────────────────────────────────────────────────────────
+    # ── Determine fire subgrid ratios and domain parameters ──────────────────
+    # An explicit namelist value wins (e.g. adding a fire grid to a geo_em file
+    # generated without one); otherwise the WPS file's sr_x/sr_y attributes are used.
     domain_index = args.domain - 1  # namelist arrays are 0-indexed, domain numbers are 1-indexed
-    print(f"Reading namelist: {args.namelist}")
-    sr_x, sr_y = get_fire_subgrid_ratios(args.namelist, domain_index=domain_index)
-    print(f"  subgrid_ratio_x = {sr_x},  subgrid_ratio_y = {sr_y}")
-    nml_params = get_domain_params(args.namelist, domain_index=domain_index)
+    file_sr = read_subgrid_ratios_from_file(files[0])
+    nml_sr = (None, None)
+    nml_params = None
+    if os.path.isfile(args.namelist):
+        print(f"Reading namelist: {args.namelist}")
+        nml_sr = get_fire_subgrid_ratios(args.namelist, domain_index=domain_index)
+        nml_params = get_domain_params(args.namelist, domain_index=domain_index)
+
+    if nml_sr[0] is not None:
+        sr_x, sr_y = nml_sr
+        sr_source = args.namelist
+        if file_sr[0] is not None and file_sr != nml_sr:
+            print(
+                f"  Note: {basenames[0]} has sr_x/sr_y = {file_sr[0]}/{file_sr[1]}; "
+                f"using the namelist values {sr_x}/{sr_y} instead."
+            )
+    elif file_sr[0] is not None:
+        sr_x, sr_y = file_sr
+        sr_source = f"{basenames[0]} global attributes"
+    else:
+        parser.error(
+            f"Fire subgrid ratios not found: '{basenames[0]}' has no sr_x/sr_y global "
+            f"attributes and no namelist with subgrid_ratio_x/y was found at "
+            f"'{args.namelist}'. Supply --namelist."
+        )
+    print(f"  subgrid_ratio_x = {sr_x},  subgrid_ratio_y = {sr_y}  (from {sr_source})")
 
     # ── Build WRF domain geometry ─────────────────────────────────────────────
     print(f"Reading domain geometry from {basenames[0]} ...")
@@ -183,22 +289,178 @@ def main(argv=None):
         f"({fire_grid.dx:.1f} m × {fire_grid.dy:.1f} m cells)"
     )
 
+    return fire_grid, sr_x, sr_y
+
+
+def _perimeter_main(parser, args) -> None:
+    """--perimeter: write lfn_init from a GeoJSON perimeter."""
+    if not args.wps_files:
+        parser.error("--perimeter needs --wps-files (the fire domain's geo_em)")
+    if args.fuel or args.zsf or args.copy_from:
+        parser.error("--perimeter writes only lfn_init; run --fuel/--zsf or "
+                     "--copy-from separately")
+    try:
+        import scipy.ndimage  # noqa: F401  (only --perimeter needs it)
+    except ImportError:
+        sys.exit("Error: --perimeter needs scipy (conda install -c conda-forge scipy; "
+                 "it is in environment.yaml)")
+    files = sorted(glob.glob(args.wps_files))
+    if not files:
+        raise FileNotFoundError(f"No files matched the pattern: '{args.wps_files}'")
+
+    fire_grid, sr_x, sr_y = _fire_grid(parser, args, files)
+
+    try:
+        polys = perimeter.read_perimeter(args.perimeter)
+        mask = perimeter.burnt_mask(polys, fire_grid)
+        lfn = perimeter.signed_distance(mask, fire_grid.dx, fire_grid.dy)
+    except ValueError as exc:
+        sys.exit(f"Error: {args.perimeter}: {exc}")
+    area = mask.sum() * fire_grid.dx * fire_grid.dy
+    print(f"Perimeter {args.perimeter}: {len(polys)} polygon(s), {int(mask.sum())} burnt "
+          f"cells, {area / 1e4:.1f} ha ({area / 4046.86:.0f} acres)")
+    print(f"  lfn_init range [{lfn.min():.1f}, {lfn.max():.1f}] m (negative inside)")
+    for file_path in files:
+        perimeter.write_lfn_init(file_path, lfn, os.path.basename(args.perimeter))
+        print(f"  wrote lfn_init into {os.path.basename(file_path)}")
+    print(f"\nFinished: {len(files)} file(s) updated. CFBM starts the fire from it with "
+          f"fire_is_real_perim = .true., at fire_ignition_start_time1 (standalone CFBM; "
+          f"coupled WRF-CFBM can't read it yet).")
+
+
+def _copy_main(parser, args) -> None:
+    """--copy-from: copy existing fire fields into the target file(s)."""
+    if not args.wps_files:
+        parser.error("--copy-from needs --wps-files (the file(s) to copy into)")
+    if args.fuel or args.zsf:
+        parser.error("--copy-from copies fields from a file; it can't be combined "
+                     "with --fuel / --zsf")
+    if not os.path.isfile(args.copy_from):
+        raise FileNotFoundError(f"--copy-from file not found: {args.copy_from}")
+    try:
+        names = _parse_vars(args.vars)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    files = sorted(glob.glob(args.wps_files))
+    if not files:
+        raise FileNotFoundError(f"No files matched the pattern: '{args.wps_files}'")
+    print(f"Copying {', '.join(names)} from {args.copy_from}")
+    for file_path in files:
+        try:
+            ranges = copy_fire_vars(args.copy_from, file_path, names)
+        except ValueError as exc:
+            sys.exit(f"Error: cannot copy into {os.path.basename(file_path)}: {exc}")
+        print(f"  {os.path.basename(file_path)}:")
+        for name, (lo, hi) in ranges.items():
+            print(f"    {name:9s} range [{lo:.4g}, {hi:.4g}]")
+    print(f"\nFinished: {len(files)} file(s) updated.")
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    # ── Load config and merge ─────────────────────────────────────────────────
+    cfg = load_config(args.config) if args.config and os.path.isfile(args.config) else {}
+    args = _merge(args, cfg)
+
+    if args.copy_from:
+        _copy_main(parser, args)
+        return
+    if args.perimeter:
+        _perimeter_main(parser, args)
+        return
+
+    # ── Validate required arguments ───────────────────────────────────────────
+    missing = [f"--{d.replace('_', '-')}" for d in _REQUIRED if not getattr(args, d, None)]
+    if missing:
+        parser.error(
+            f"The following arguments are required: {', '.join(missing)}\n"
+            "Supply them on the command line or via --config."
+        )
+    if args.zsf_source not in ("nationalmap", "landfire"):
+        parser.error(f"zsf_source must be 'nationalmap' or 'landfire', got '{args.zsf_source}'")
+
+    # ── Find WPS files ─────────────────────────────────────────────────────
+    print(f"Searching for WPS file(s): {args.wps_files}")
+    files = sorted(glob.glob(args.wps_files))
+    if not files:
+        raise FileNotFoundError(f"No files matched the pattern: '{args.wps_files}'")
+    basenames = [os.path.basename(f) for f in files]
+    print(f"  Found {len(files)} file(s): {basenames}")
+
+    fire_grid, sr_x, sr_y = _fire_grid(parser, args, files)
+
     # ── Load fuel table ───────────────────────────────────────────────────────
     fuel_table = get_fuel_table(args.fuel_table)
     print(f"Fuel table: {fuel_table.name}  —  {fuel_table.description}")
 
+    # ── Download any missing source rasters ───────────────────────────────────
+    if args.fuel is None or args.zsf is None:
+        # Imported lazily so environments without `requests` can still run
+        # with locally supplied rasters.
+        from .download import (
+            fire_grid_bbox_wgs84, bbox_tag, resolve_landfire_layer,
+            download_landfire, download_usgs_dem,
+        )
+        bbox = fire_grid_bbox_wgs84(fire_grid)
+        tag = bbox_tag(bbox)
+        os.makedirs(args.download_dir, exist_ok=True)
+        print(
+            f"Download area (WGS84): W={bbox[0]:.4f}  S={bbox[1]:.4f}  "
+            f"E={bbox[2]:.4f}  N={bbox[3]:.4f}"
+        )
+
+        if args.fuel is None:
+            product = _FUEL_TABLE_PRODUCT.get(fuel_table.name)
+            if product is None:
+                parser.error(
+                    "--fuel is required when using a custom fuel table "
+                    "(cannot infer which LANDFIRE product to download)."
+                )
+            print(f"No fuel raster given; downloading {product} from LANDFIRE ...")
+            layer = resolve_landfire_layer(product, args.landfire_version)
+            args.fuel = download_landfire(
+                layer, bbox, os.path.join(args.download_dir, f"{layer}_{tag}.tif"),
+                args.email or os.environ.get("LANDFIRE_EMAIL"),
+            )
+
+        if args.zsf is None:
+            if args.zsf_source == "landfire":
+                print("No terrain DEM given; downloading elevation from LANDFIRE ...")
+                layer = resolve_landfire_layer("Elev")
+                args.zsf = download_landfire(
+                    layer, bbox, os.path.join(args.download_dir, f"{layer}_{tag}.tif"),
+                    args.email or os.environ.get("LANDFIRE_EMAIL"),
+                )
+            else:
+                print("No terrain DEM given; downloading 1/3 arc-second DEM from the USGS National Map ...")
+                args.zsf = download_usgs_dem(
+                    bbox, args.download_dir,
+                    os.path.join(args.download_dir, f"USGS_3DEP_13as_{tag}.tif"),
+                )
+
     # ── Reproject fuel categories ─────────────────────────────────────────────
     print(f"Reprojecting fuel data: {args.fuel}")
-    nfuel_raw, fuel_valid = reproject_fuel(
-        args.fuel, fire_grid, return_mask=True
-    )
+    try:
+        nfuel_raw, fuel_valid = reproject_fuel(
+            args.fuel, fire_grid, return_mask=True, strict=args.strict_coverage
+        )
+    except ValueError as exc:
+        sys.exit(f"Error: {exc}")
     print(
         f"  Valid fuel coverage: {np.count_nonzero(fuel_valid) / fuel_valid.size:.2%}"
     )
 
     # ── Reproject DEM ─────────────────────────────────────────────────────────
     print(f"Reprojecting terrain DEM: {args.zsf}")
-    zsf_raw, dem_valid = reproject_dem(args.zsf, fire_grid, return_mask=True)
+    try:
+        zsf_raw, dem_valid = reproject_dem(
+            args.zsf, fire_grid, return_mask=True, strict=args.strict_coverage
+        )
+    except ValueError as exc:
+        sys.exit(f"Error: {exc}")
     terrain, terrain_name = read_atmospheric_terrain(files[0])
     terrain_background = interpolate_hgt_to_fire_grid(
         terrain,

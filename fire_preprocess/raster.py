@@ -29,7 +29,7 @@ def _warn_coverage(
     if frac > threshold:
         warnings.warn(
             f"{field_name}: {frac:.1%} of fire-grid pixels are outside the "
-            "source coverage; the workflow will use its configured background.",
+            "source coverage; they get no fuel and the interpolated HGT_M.",
             stacklevel=3,
         )
 
@@ -42,8 +42,16 @@ def reproject_to_grid(
     src_nodata: float | None = None,
     field_name: str = "field",
     return_mask: bool = False,
+    strict: bool = False,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Core reprojection routine.
+
+    Pixels the source doesn't cover (outside its extent, or nodata within
+    it) are NaN and False in the mask; the caller supplies the background.
+
+    With *strict*, raises ValueError if any fire-grid cell lies outside the
+    source raster's extent. Cells inside it that hold nodata (e.g. LANDFIRE
+    offshore) are not counted: they get the background, as without *strict*.
 
     Returns a 2-D float32 array in WRF row order (south_north, west_east):
     row 0 is the *southernmost* row, matching WRF/WPS netCDF convention.
@@ -71,6 +79,23 @@ def reproject_to_grid(
             resampling=resampling,
             init_dest_nodata=True,
         )
+        if strict:
+            # The raster's footprint on the fire grid: a constant field, so
+            # only cells outside the extent come back empty.
+            footprint = np.full((height, width), np.nan, dtype=np.float32)
+            reproject(
+                source=np.ones(src_data.shape, dtype=np.float32),
+                destination=footprint,
+                src_transform=src.transform, src_crs=src.crs, src_nodata=None,
+                dst_transform=fire_grid.transform, dst_crs=dst_crs,
+                dst_nodata=np.nan, resampling=Resampling.nearest,
+            )
+            outside = int(np.isnan(footprint).sum())
+            if outside:
+                raise ValueError(
+                    f"{field_name}: {outside} of {footprint.size} fire-grid cells "
+                    f"({outside / footprint.size:.1%}) are outside {src_path}; "
+                    f"the raster must cover the whole fire domain")
 
     # rasterio returns row 0 = north; WRF netCDF expects row 0 = south.
     dst_data = np.flipud(dst_data)
@@ -87,17 +112,18 @@ def reproject_fuel(
     fire_grid: FireGrid,
     band: int = 1,
     return_mask: bool = False,
+    strict: bool = False,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Reproject a fuel-category GeoTIFF to the fire grid.
 
-    Uses nearest-neighbour resampling to preserve integer category values.
+    Uses nearest-neighbor resampling to preserve integer category values.
     LANDFIRE categorical data must not be interpolated.
     """
     return reproject_to_grid(
         src_path, fire_grid,
         resampling=Resampling.nearest,
         band=band,
-        field_name="NFUEL_CAT", return_mask=return_mask,
+        field_name="NFUEL_CAT", return_mask=return_mask, strict=strict,
     )
 
 
@@ -106,6 +132,7 @@ def reproject_dem(
     fire_grid: FireGrid,
     band: int = 1,
     return_mask: bool = False,
+    strict: bool = False,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Reproject a terrain DEM GeoTIFF to the fire grid.
 
@@ -116,5 +143,5 @@ def reproject_dem(
         src_path, fire_grid,
         resampling=Resampling.bilinear,
         band=band,
-        field_name="ZSF", return_mask=return_mask,
+        field_name="ZSF", return_mask=return_mask, strict=strict,
     )

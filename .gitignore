@@ -4,3 +4,4 @@
 FILE:*
 __pycache__/
 *.pyc
+downloads/
