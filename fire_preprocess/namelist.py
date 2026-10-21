@@ -43,7 +43,7 @@ def get_domain_params(path, domain_index=0):
 
     Returned keys: map_proj (int), truelat1, truelat2, stand_lon,
     ref_lat, ref_lon, ref_x, ref_y, dx, dy, e_we, e_sn.
-    ref_x/ref_y default to the domain centre if not in the namelist.
+    ref_x/ref_y default to the domain center if not in the namelist.
     """
     params = read_namelist_wps(path)
 

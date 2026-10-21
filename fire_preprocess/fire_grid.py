@@ -22,8 +22,8 @@ from .wrf_domain import WRFDomain
 class FireGrid:
     nx_fire: int
     ny_fire: int
-    dx: float        # fire cell spacing (metres), west-east
-    dy: float        # fire cell spacing (metres), south-north
+    dx: float        # fire cell spacing (meters), west-east
+    dy: float        # fire cell spacing (meters), south-north
     transform: object  # affine.Affine for rasterio reprojection
     crs: object      # pyproj.CRS of the fire grid
 

@@ -116,7 +116,7 @@ def reproject_fuel(
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Reproject a fuel-category GeoTIFF to the fire grid.
 
-    Uses nearest-neighbour resampling to preserve integer category values.
+    Uses nearest-neighbor resampling to preserve integer category values.
     LANDFIRE categorical data must not be interpolated.
     """
     return reproject_to_grid(

@@ -47,7 +47,7 @@ _FUEL_TABLE_PRODUCT = {
 def load_config(path: str) -> dict:
     """Load a YAML config file and return a dict keyed by argparse dest names.
 
-    Config keys are normalised to lowercase with hyphens replaced by
+    Config keys are normalized to lowercase with hyphens replaced by
     underscores, so 'ZSF', 'zsf', and 'z-s-f' all map to dest 'zsf'.
     """
     with open(path) as fh:

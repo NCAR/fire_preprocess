@@ -8,7 +8,7 @@ derives them from ZSF.  So whenever ZSF is replaced, DZDXF/DZDYF have to be
 replaced with it, or slope makes no contribution to the rate of spread.
 
 The stencil matches geogrid's calc_dfdx/calc_dfdy in
-WPS geogrid/src/process_tile_module.f90: a centred difference over two fire
+WPS geogrid/src/process_tile_module.f90: a centered difference over two fire
 cells in the interior, one-sided at the domain edges.  Where high-resolution
 terrain coverage is clipped, both gradients are set to zero if this stencil
 crosses the coverage boundary.
@@ -39,14 +39,14 @@ def _apply_map_scale(
     fire_grid: FireGrid,
     apply_mask: np.ndarray | None = None,
 ) -> None:
-    """Apply WRF-compatible map factors at fire-grid cell centres.
+    """Apply WRF-compatible map factors at fire-grid cell centers.
 
     For the conformal projections WRF supports, the parallel and meridional
     scales are equal to within roundoff.  They are applied separately here,
     mirroring geogrid's use of MAPFAC_MX and MAPFAC_MY.
 
     A geographic (lat-lon) fire grid is unchanged because its spacing is in
-    degrees rather than projected metres and these metric terms do not apply.
+    degrees rather than projected meters and these metric terms do not apply.
     If *apply_mask* is supplied, projection work is limited to its bounding
     box; values outside the mask are subsequently zeroed by ``compute_slope``.
     """
@@ -65,7 +65,7 @@ def _apply_map_scale(
         column_start, column_stop = valid_columns.min(), valid_columns.max() + 1
 
     transform = fire_grid.transform
-    # from_origin() yields an axis-aligned transform, so cell centres separate
+    # from_origin() yields an axis-aligned transform, so cell centers separate
     # into independent 1-D x and y sequences.
     columns = np.arange(column_start, column_stop)
     xs = transform.c + (columns + 0.5) * transform.a
